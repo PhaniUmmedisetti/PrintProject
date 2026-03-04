@@ -1,8 +1,5 @@
-"""
-Background heartbeat loop.
-Posts printer states to the cloud admin API every HEARTBEAT_INTERVAL seconds.
-Failures are silently swallowed — a missed heartbeat is not fatal.
-"""
+"""Background heartbeat loop for PrintNest device telemetry."""
+
 import asyncio
 import logging
 

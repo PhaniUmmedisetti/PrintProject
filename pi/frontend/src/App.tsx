@@ -67,7 +67,6 @@ export default function App() {
                                 onError={msg => dispatch({ type: 'ERROR', msg })} />
       case 'PRINTING': return <PrintingScreen
                                 jobId={state.job!.job_id}
-                                printerType={state.job!.printer_type}
                                 onDone={() => dispatch({ type: 'PRINT_DONE' })}
                                 onError={msg => dispatch({ type: 'ERROR', msg })} />
       case 'SUCCESS':  return <SuccessScreen onDone={() => dispatch({ type: 'RESET' })} />

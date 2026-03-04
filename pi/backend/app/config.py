@@ -4,16 +4,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    # Cloud
+    # PrintNest backend
     cloud_api_url: str
-    store_api_key: str
-    store_id: str
+    device_id: str
+    shared_secret: str
+    store_id: str | None = None
 
-    # CUPS printer names — run `lpstat -p` on the Pi to find these
-    photo_printer_name: str
+    # CUPS printer names - run `lpstat -p` on the Pi to find these
     document_printer_name: str
+    photo_printer_name: str | None = None
 
-    # Local temp storage — print-and-delete, never accumulates
+    # Local temp storage - print-and-delete, never accumulates
     temp_dir: str = "/tmp/printjobs"
 
     # Heartbeat

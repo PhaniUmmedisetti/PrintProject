@@ -1,38 +1,36 @@
-import { useEffect, useRef } from 'react'
-import { motion } from 'framer-motion'
-import PrinterAnimation from '../components/PrinterAnimation'
-import { getJobStatus } from '../api/piBackend'
+import { useEffect, useRef } from "react";
+import { motion } from "framer-motion";
+
+import PrinterAnimation from "../components/PrinterAnimation";
+import { getJobStatus } from "../api/piBackend";
 
 interface Props {
-  jobId: string
-  printerType: string
-  onDone: () => void
-  onError: (msg: string) => void
+  jobId: string;
+  onDone: () => void;
+  onError: (msg: string) => void;
 }
 
-export default function PrintingScreen({ jobId, printerType, onDone, onError }: Props) {
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  const label = printerType === 'COLOR_PHOTO' ? 'photo' : 'document'
+export default function PrintingScreen({ jobId, onDone, onError }: Props) {
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     intervalRef.current = setInterval(async () => {
       try {
-        const status = await getJobStatus(jobId)
-        if (status.status === 'DONE') {
-          clearInterval(intervalRef.current!)
-          onDone()
-        } else if (status.status === 'FAILED') {
-          clearInterval(intervalRef.current!)
-          onError(`Printing failed. Please collect your receipt and contact staff.`)
+        const status = await getJobStatus(jobId);
+        if (status.status === "DONE") {
+          clearInterval(intervalRef.current!);
+          onDone();
+        } else if (status.status === "FAILED") {
+          clearInterval(intervalRef.current!);
+          onError("Printing failed. Please contact staff.");
         }
       } catch {
-        // transient — keep polling
+        // Keep polling through transient local failures.
       }
-    }, 2000)
+    }, 2000);
 
-    return () => clearInterval(intervalRef.current!)
-  }, [jobId, onDone, onError])
+    return () => clearInterval(intervalRef.current!);
+  }, [jobId, onDone, onError]);
 
   return (
     <motion.div
@@ -48,14 +46,14 @@ export default function PrintingScreen({ jobId, printerType, onDone, onError }: 
       <motion.p
         className="text-kiosk-xl font-bold text-slate-100 text-center px-8"
         animate={{ opacity: [1, 0.5, 1] }}
-        transition={{ repeat: Infinity, duration: 2, ease: 'easeInOut' }}
+        transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
       >
-        Printing your {label}…
+        Printing your document...
       </motion.p>
 
       <p className="text-kiosk-md text-slate-500 text-center px-8">
-        Please wait — collect your print from the tray
+        Please wait. Collect your print from the tray.
       </p>
     </motion.div>
-  )
+  );
 }
