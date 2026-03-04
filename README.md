@@ -106,7 +106,9 @@ PrintProject/
 ## Key Design Decisions
 
 - **One-time codes** are alphanumeric (e.g. `A4K9-2X`), expire after first use or after a configurable TTL (e.g. 30 min).
-- **Files are deleted from S3** after successful print (or after TTL) for privacy.
+- **Max upload size: 50 MB** — enough for 10 iPhone HD photos; enforced on cloud backend before S3 write.
+- **Files are deleted from S3** immediately after successful print. S3 lifecycle rule auto-deletes anything remaining after **5 days** as a safety net.
+- **Pi is stateless on disk** — print-and-delete: temp files (original + any converted PDF) are removed immediately after the CUPS job completes. Pi never accumulates files.
 - **Pi operates offline-tolerant** — once a file is downloaded, printing continues even if
   cloud connectivity drops momentarily.
 - **Pi backend runs as a systemd service** — auto-starts on boot, restarts on crash.
@@ -139,6 +141,7 @@ PrintProject/
 - [x] Code format: alphanumeric (e.g. `A4K9-2X`)
 - [x] Multi-store: yes, from day one
 - [x] Admin dashboard: yes, MVP scope
-- [ ] Max file size per upload? *(still to decide)*
-- [ ] S3 file retention TTL? *(still to decide)*
+- [x] Max file size: **50 MB per upload** (covers 10 iPhone HD photos @ ~5 MB each; also fits large PDFs and Office docs)
+- [x] S3 file retention TTL: **5 days** (S3 lifecycle rule auto-deletes; files also deleted immediately on successful print)
+- [x] Pi storage: **print-and-delete** — temp files removed immediately after successful CUPS job. Pi only ever holds one in-flight job at a time.
 - [ ] USB walk-up printing? *(deferred — cloud-only for MVP)*

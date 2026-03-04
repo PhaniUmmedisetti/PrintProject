@@ -31,7 +31,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done
 - [ ] Run initial EF Core migration
 
 ### 1.3 File Upload API
-- [ ] `POST /api/jobs/upload` — accept multipart file, validate type (PDF, DOCX, XLSX, PPTX, JPG, PNG) and size, upload original to S3
+- [ ] `POST /api/jobs/upload` — accept multipart file, validate type (PDF, DOCX, XLSX, PPTX, JPG, PNG) and size (**max 50 MB**), upload original to S3
 - [ ] Store file_key and original_filename on job record
 - [ ] Return `job_id` and draft job details
 
@@ -49,7 +49,9 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done
 ### 1.6 Job Lifecycle
 - [ ] `GET /api/jobs/{id}/status` — return current print job status (for kiosk polling)
 - [ ] `PATCH /api/jobs/{id}/status` — Pi backend updates status (PRINTING, DONE, FAILED)
-- [ ] Scheduled cleanup: delete expired/used files from S3, purge old records
+- [ ] Delete file from S3 immediately on successful print status update from Pi
+- [ ] S3 lifecycle rule: auto-delete objects in the jobs bucket after **5 days** (safety net)
+- [ ] Scheduled cleanup job: mark jobs `EXPIRED` and purge DB records older than 5 days
 
 ### 1.7 Admin API
 - [ ] Admin JWT auth (separate from Pi API key auth) — seed one superadmin account
@@ -134,7 +136,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done
 ### 3.5 Local Job State
 - [ ] Maintain a lightweight local SQLite DB (via `aiosqlite`) for in-flight jobs
   - Survives Pi restarts; prevents re-downloading on reconnect
-- [ ] Clean up temp files (original + converted PDF) after successful print
+- [ ] **Print-and-delete**: immediately remove temp dir (original file + converted PDF) after CUPS job completes or fails
+- [ ] Pi temp dir budget: never accumulates — one job at a time, cleaned on completion
 
 ### 3.6 Heartbeat
 - [ ] Background task: POST to `/api/admin/stores/{id}/heartbeat` every 60s
