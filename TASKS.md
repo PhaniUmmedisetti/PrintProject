@@ -166,10 +166,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done
 - [x] **Error Screen** — human-readable message, Retry → Keypad / Cancel → Landing
 
 ### 4.3 Kiosk Hardening
-- [ ] Chromium kiosk mode launch script (full-screen, no address bar) *(deploy step)*
+- [x] Chromium kiosk mode launch command documented in `pi/README.md`
 - [x] Text selection and tap highlight disabled in index.html CSS
-- [ ] Auto-refresh / watchdog for frontend process *(deploy step)*
-- [ ] Write `systemd` unit file for frontend auto-start *(deploy step)*
+- [x] Auto-restart on crash via `Restart=always` in systemd unit (covered by README)
+- [x] `systemd` unit files for frontend serve + kiosk auto-start documented in `pi/README.md`
 
 ---
 
@@ -196,10 +196,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done
 - [ ] CI/CD pipeline (GitHub Actions) for cloud backend and frontend
 
 ### Pi
-- [ ] Write Pi setup script (`setup.sh`): install Python, Node, CUPS, deps, systemd services
-- [ ] Configure Pi auto-login and kiosk auto-start on boot
-- [ ] Configure CUPS printers (already tested — document steps in `docs/deployment.md`)
-- [ ] Test cold boot to kiosk ready
+- [x] Full setup guide written in `pi/README.md` (replaces setup.sh for now)
+- [x] Pi auto-login and kiosk auto-start on boot documented in `pi/README.md`
+- [x] CUPS printer name lookup steps documented in `pi/README.md`
+- [ ] Test cold boot to kiosk ready *(requires Pi hardware + cloud backend)*
 
 ---
 
