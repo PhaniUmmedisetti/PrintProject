@@ -20,5 +20,9 @@ class Settings(BaseSettings):
     # Heartbeat
     heartbeat_interval: int = 60
 
+    # Debugging aid: keep failed job files on disk for inspection.
+    # Set KEEP_FAILED_JOB_FILES=true in .env when troubleshooting CUPS failures.
+    keep_failed_job_files: bool = False
+
 
 settings = Settings()

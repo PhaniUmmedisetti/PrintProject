@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from app.services.converter import convert_to_pdf_if_needed
 from app.services.downloader import download_file
 
 router = APIRouter(prefix="/local", tags=["print"])
+logger = logging.getLogger(__name__)
 
 
 class PrintRequest(BaseModel):
@@ -97,9 +99,15 @@ async def _download_and_convert(job: dict) -> None:
 
     try:
         file_path = await download_file(job_id=job_id, file_token=job["file_token"])
+        try:
+            size = file_path.stat().st_size
+        except OSError:
+            size = -1
+        logger.info("Job %s downloaded to %s (%d bytes)", job_id, file_path, size)
         await update_job(job_id, "CONVERTING", file_path=str(file_path))
 
         print_path = await convert_to_pdf_if_needed(file_path, "pdf")
+        logger.info("Job %s ready for print path=%s", job_id, print_path)
         await update_job(job_id, "READY", file_path=str(print_path))
     except Exception as exc:
         await update_job(job_id, "FAILED", error_msg=str(exc))
@@ -113,8 +121,10 @@ async def _download_and_convert(job: dict) -> None:
             )
         except Exception:
             pass
-        if job_dir.exists():
+        if job_dir.exists() and not settings.keep_failed_job_files:
             shutil.rmtree(job_dir, ignore_errors=True)
+        elif job_dir.exists():
+            logger.warning("Keeping failed job files for debug: %s", job_dir)
 
 
 async def _submit_and_monitor(
@@ -134,6 +144,13 @@ async def _submit_and_monitor(
         }
         cups_job_id = await cups_service.submit_to_cups(file_path, printer_name, cups_options)
         cups_job_id_str = str(cups_job_id)
+        logger.info(
+            "Job %s submitted to CUPS queue=%s cups_job_id=%s file=%s",
+            job_id,
+            printer_name,
+            cups_job_id_str,
+            file_path,
+        )
         await update_job(job_id, "PRINTING", cups_job_id=cups_job_id_str)
         await cloud_api.mark_printing_started(job_id, cups_job_id_str, printer_name)
         result = await cups_service.wait_for_cups_job(cups_job_id)
@@ -163,5 +180,13 @@ async def _submit_and_monitor(
         except Exception:
             pass
     finally:
-        if job_dir.exists():
+        should_cleanup = True
+        if settings.keep_failed_job_files:
+            job_state = await get_job(job_id)
+            if job_state and job_state["status"] == "FAILED":
+                should_cleanup = False
+
+        if job_dir.exists() and should_cleanup:
             shutil.rmtree(job_dir, ignore_errors=True)
+        elif job_dir.exists():
+            logger.warning("Keeping failed job files for debug: %s", job_dir)
