@@ -26,20 +26,30 @@ _STATE_BLOCKED = {4, 6}  # pending-held / processing-stopped
 
 
 def _build_cups_options(options: dict) -> dict[str, str]:
-    """Map our option schema to CUPS IPP option strings."""
+    """Map our option schema to conservative CUPS options for max compatibility."""
     cups_opts: dict[str, str] = {}
 
     copies = options.get("copies", 1)
     cups_opts["copies"] = str(copies)
-
-    paper_size = options.get("paper_size", "A4")
-    cups_opts["media"] = paper_size
-
-    # Color model - only set Gray explicitly; let printer default handle color
-    if not options.get("color", True):
-        cups_opts["ColorModel"] = "Gray"
+    # Do not force media/color options here. Many consumer printer drivers reject
+    # unsupported IPP options and hold jobs as "completed-with-errors".
+    # Let queue default options control paper + color mode.
 
     return cups_opts
+
+
+def _prepare_printer_sync(printer_name: str) -> None:
+    if not _CUPS_AVAILABLE:
+        return
+    conn = cups.Connection()
+    try:
+        conn.enablePrinter(printer_name)
+    except Exception:
+        pass
+    try:
+        conn.acceptJobs(printer_name)
+    except Exception:
+        pass
 
 
 def _submit_sync(file_path: str, printer_name: str, options: dict) -> int:
@@ -54,6 +64,7 @@ def _submit_sync(file_path: str, printer_name: str, options: dict) -> int:
         raise RuntimeError(
             f"Configured printer '{printer_name}' was not found in CUPS. Available: {', '.join(available)}"
         )
+    _prepare_printer_sync(printer_name)
     return conn.printFile(
         printer_name,
         file_path,
@@ -97,6 +108,13 @@ def _poll_state_sync(cups_job_id: int) -> str:
     return "PRINTING"
 
 
+def _restart_job_sync(cups_job_id: int) -> None:
+    if not _CUPS_AVAILABLE:
+        return
+    conn = cups.Connection()
+    conn.restartJob(cups_job_id)
+
+
 def _get_all_printer_states_sync() -> dict[str, str]:
     if not _CUPS_AVAILABLE:
         result = {settings.document_printer_name: "offline"}
@@ -134,11 +152,22 @@ async def wait_for_cups_job(
 ) -> str:
     """Poll until the CUPS job reaches a terminal state. Returns 'DONE' or 'FAILED'."""
     started = time.monotonic()
+    restarted_once = False
     while True:
         if time.monotonic() - started > timeout_seconds:
             raise TimeoutError(f"CUPS job {cups_job_id} timed out after {timeout_seconds}s")
 
-        state = await asyncio.to_thread(_poll_state_sync, cups_job_id)
+        try:
+            state = await asyncio.to_thread(_poll_state_sync, cups_job_id)
+        except RuntimeError as exc:
+            text = str(exc).lower()
+            if "blocked" in text and not restarted_once:
+                await asyncio.to_thread(_restart_job_sync, cups_job_id)
+                restarted_once = True
+                await asyncio.sleep(2)
+                continue
+            raise
+
         if state == "DONE":
             return "DONE"
         if state == "FAILED":

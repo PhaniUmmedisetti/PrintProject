@@ -51,7 +51,7 @@ export default function KeypadScreen({ onBack, onCodeAccepted, onError }: Props)
       transition={{ duration: 0.3, ease: "easeOut" }}
       className="w-full h-full flex flex-col bg-surface"
     >
-      <div className="flex items-center px-4 pt-3 pb-1">
+      <div className="flex items-center px-8 pt-6 pb-2">
         <button
           onClick={onBack}
           className="text-slate-400 hover:text-slate-100 active:scale-95 text-kiosk-md transition-all touch-target px-2"
@@ -63,7 +63,7 @@ export default function KeypadScreen({ onBack, onCodeAccepted, onError }: Props)
         </h1>
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center px-4 pb-2">
+      <div className="flex-1 flex flex-col items-center justify-center px-6 pb-4">
         <CodeKeypad value={code} onChange={setCode} shaking={shaking} errorMsg={errorMsg} />
 
         <motion.button
@@ -71,8 +71,8 @@ export default function KeypadScreen({ onBack, onCodeAccepted, onError }: Props)
           disabled={code.length !== CODE_LENGTH || loading}
           whileTap={{ scale: 0.96 }}
           className={`
-            mt-3 w-full max-w-lg
-            text-kiosk-lg font-black py-3 rounded-xl
+            mt-6 w-full max-w-lg
+            text-kiosk-lg font-black py-6 rounded-2xl
             transition-all duration-200 touch-target
             ${
               code.length === CODE_LENGTH && !loading

@@ -9,8 +9,6 @@ interface Props {
 }
 
 export default function QRScreen({ onBack, onEnterCode }: Props) {
-  const qrSize = window.innerHeight <= 520 ? 145 : 190;
-
   return (
     <motion.div
       key="qr"
@@ -20,7 +18,7 @@ export default function QRScreen({ onBack, onEnterCode }: Props) {
       transition={{ duration: 0.3, ease: "easeOut" }}
       className="w-full h-full flex flex-col bg-surface"
     >
-      <div className="flex items-center px-4 pt-3 pb-1">
+      <div className="flex items-center px-8 pt-6 pb-2">
         <button
           onClick={onBack}
           className="text-slate-400 hover:text-slate-100 active:scale-95 text-kiosk-md transition-all touch-target px-2"
@@ -32,14 +30,14 @@ export default function QRScreen({ onBack, onEnterCode }: Props) {
         </h1>
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center gap-4 px-4">
-        <div className="bg-white p-3 rounded-2xl shadow-2xl shadow-black/50">
-          <QRCode value={WEBAPP_URL} size={qrSize} bgColor="#ffffff" fgColor="#0f172a" />
+      <div className="flex-1 flex flex-col items-center justify-center gap-8 px-8">
+        <div className="bg-white p-6 rounded-3xl shadow-2xl shadow-black/50">
+          <QRCode value={WEBAPP_URL} size={280} bgColor="#ffffff" fgColor="#0f172a" />
         </div>
 
         <p className="text-kiosk-md text-slate-300 text-center">Scan with your phone to upload files and pay</p>
 
-        <div className="w-full max-w-md flex items-center gap-2">
+        <div className="w-full max-w-md flex items-center gap-4">
           <div className="flex-1 h-px bg-slate-700" />
           <span className="text-kiosk-sm text-slate-500">or</span>
           <div className="flex-1 h-px bg-slate-700" />
@@ -52,7 +50,7 @@ export default function QRScreen({ onBack, onEnterCode }: Props) {
             bg-accent hover:bg-accent-hover active:scale-95
             text-slate-950 font-black
             text-kiosk-lg
-            py-3 rounded-xl
+            py-6 rounded-2xl
             transition-all duration-150
             shadow-lg shadow-accent/30
             touch-target

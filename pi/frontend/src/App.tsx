@@ -78,12 +78,10 @@ export default function App() {
   })()
 
   return (
-    <div className="kiosk-shell">
-      <div className="kiosk-frame">
-        <AnimatePresence mode="wait">
-          {screen}
-        </AnimatePresence>
-      </div>
+    <div className="w-screen h-screen overflow-hidden bg-surface">
+      <AnimatePresence mode="wait">
+        {screen}
+      </AnimatePresence>
     </div>
   )
 }

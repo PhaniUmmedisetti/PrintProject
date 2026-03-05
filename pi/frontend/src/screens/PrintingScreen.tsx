@@ -43,7 +43,7 @@ export default function PrintingScreen({ jobId, onDone, onError }: Props) {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.3 }}
-      className="w-full h-full flex flex-col items-center justify-center gap-4 bg-surface px-4"
+      className="w-full h-full flex flex-col items-center justify-center gap-8 bg-surface"
     >
       <PrinterAnimation />
 

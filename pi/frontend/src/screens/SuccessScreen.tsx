@@ -34,18 +34,18 @@ export default function SuccessScreen({ onDone }: Props) {
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.4, ease: 'easeOut' }}
-      className="w-full h-full flex flex-col items-center justify-center gap-4 bg-surface px-4"
+      className="w-full h-full flex flex-col items-center justify-center gap-8 bg-surface"
     >
       {/* Animated checkmark */}
       <motion.div
         initial={{ scale: 0 }}
         animate={{ scale: 1 }}
         transition={{ type: 'spring', stiffness: 220, damping: 14, delay: 0.1 }}
-        className="w-24 h-24 rounded-full bg-emerald-500/20 flex items-center justify-center"
+        className="w-36 h-36 rounded-full bg-emerald-500/20 flex items-center justify-center"
       >
         <motion.svg
           viewBox="0 0 52 52"
-          className="w-14 h-14"
+          className="w-20 h-20"
           initial={{ pathLength: 0 }}
           animate={{ pathLength: 1 }}
           transition={{ duration: 0.5, delay: 0.3, ease: 'easeOut' }}
@@ -87,7 +87,7 @@ export default function SuccessScreen({ onDone }: Props) {
         className="
           bg-emerald-500 hover:bg-emerald-400
           text-slate-950 font-black
-          text-kiosk-lg px-10 py-3 rounded-xl
+          text-kiosk-lg px-16 py-6 rounded-2xl
           shadow-lg shadow-emerald-500/30
           transition-all duration-150 touch-target
         "
