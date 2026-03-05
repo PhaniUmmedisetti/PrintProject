@@ -4,24 +4,24 @@ export default {
   theme: {
     extend: {
       fontSize: {
-        // Fluid sizes — readable from across the room
-        'hero':  'clamp(4rem,   16vw, 13rem)',
-        'hero-sub': 'clamp(3rem, 12vw, 10rem)',
-        'kiosk-xl': 'clamp(2rem, 6vw,  5rem)',
-        'kiosk-lg': 'clamp(1.5rem, 4vw, 3.5rem)',
-        'kiosk-md': 'clamp(1.25rem, 3vw, 2.5rem)',
-        'kiosk-sm': 'clamp(1rem, 2vw, 1.75rem)',
+        // Tuned for Raspberry Pi 7-inch display (800x480), still scales up on larger displays.
+        hero: 'clamp(2.1rem, 8vw, 5rem)',
+        'hero-sub': 'clamp(1.6rem, 6vw, 3.5rem)',
+        'kiosk-xl': 'clamp(1.1rem, 3.4vw, 2.2rem)',
+        'kiosk-lg': 'clamp(0.95rem, 2.7vw, 1.6rem)',
+        'kiosk-md': 'clamp(0.85rem, 2.1vw, 1.25rem)',
+        'kiosk-sm': 'clamp(0.7rem, 1.7vw, 0.95rem)',
       },
       colors: {
         surface: {
-          DEFAULT: '#0f172a',   // slate-900 — base background
-          card:    '#1e293b',   // slate-800 — card background
-          raised:  '#334155',   // slate-700 — raised elements
+          DEFAULT: '#0f172a',
+          card: '#1e293b',
+          raised: '#334155',
         },
         accent: {
-          DEFAULT: '#06b6d4',   // cyan-500
-          hover:   '#0891b2',   // cyan-600
-          glow:    '#67e8f9',   // cyan-300 — for glow effects
+          DEFAULT: '#06b6d4',
+          hover: '#0891b2',
+          glow: '#67e8f9',
         },
       },
       keyframes: {

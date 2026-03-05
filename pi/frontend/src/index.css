@@ -10,11 +10,41 @@
     color: #f1f5f9;
     font-family: system-ui, -apple-system, sans-serif;
   }
+
+  body {
+    margin: 0;
+    overflow: hidden;
+    touch-action: manipulation;
+  }
 }
 
 @layer utilities {
   .touch-target {
-    min-height: 64px;
-    min-width: 64px;
+    min-height: 56px;
+    min-width: 56px;
+  }
+}
+
+.kiosk-shell {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #0f172a;
+}
+
+.kiosk-frame {
+  width: min(100vw, calc(100vh * 5 / 3));
+  height: min(100vh, calc(100vw * 3 / 5));
+  overflow: hidden;
+  background: #0f172a;
+}
+
+@media (max-height: 520px) {
+  .touch-target {
+    min-height: 48px;
+    min-width: 48px;
   }
 }

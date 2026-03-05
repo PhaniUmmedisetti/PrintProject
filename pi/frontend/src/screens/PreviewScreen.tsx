@@ -25,7 +25,11 @@ export default function PreviewScreen({ job, onConfirm, onError }: Props) {
           setReady(true);
         } else if (status.status === "FAILED") {
           clearInterval(intervalRef.current!);
-          onError("Failed to prepare your file. Please try again or contact staff.");
+          onError(
+            status.error_msg
+              ? `Failed to prepare file: ${status.error_msg}`
+              : "Failed to prepare your file. Please try again or contact staff."
+          );
         }
       } catch {
         // Keep polling through transient local failures.
@@ -54,27 +58,27 @@ export default function PreviewScreen({ job, onConfirm, onError }: Props) {
       transition={{ duration: 0.3, ease: "easeOut" }}
       className="w-full h-full flex flex-col bg-surface"
     >
-      <div className="px-8 pt-6 pb-2">
+      <div className="px-4 pt-3 pb-1">
         <h1 className="text-center text-kiosk-xl font-bold text-slate-100">Your Print Job</h1>
         <p className="text-center text-kiosk-sm text-slate-400 mt-1">
           {ready ? "Ready to print." : "Preparing your file..."}
         </p>
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center px-10 gap-6">
+      <div className="flex-1 flex flex-col items-center justify-center px-4 gap-3">
         <motion.div
           initial={{ scale: 0.95, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ delay: 0.1 }}
-          className="w-full max-w-xl bg-surface-card rounded-3xl p-8 shadow-xl border border-slate-700/50"
+          className="w-full max-w-xl bg-surface-card rounded-2xl p-4 shadow-xl border border-slate-700/50"
         >
-          <div className="mb-6">
+          <div className="mb-3">
             <p className="text-kiosk-md font-bold text-slate-100 text-center">Confirm the print details below.</p>
           </div>
 
-          <div className="h-px bg-slate-700 mb-6" />
+          <div className="h-px bg-slate-700 mb-3" />
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-2">
             <InfoRow label="Copies" value={String(summary?.copies ?? 1)} />
             <InfoRow label="Color" value={String(summary?.color ?? "BW")} />
             <InfoRow
@@ -105,7 +109,7 @@ export default function PreviewScreen({ job, onConfirm, onError }: Props) {
               w-full max-w-xl
               bg-accent hover:bg-accent-hover
               text-slate-950 font-black
-              text-kiosk-lg py-6 rounded-2xl
+              text-kiosk-lg py-3 rounded-xl
               transition-all duration-150
               shadow-lg shadow-accent/30
               touch-target
@@ -125,7 +129,7 @@ function formatPrice(priceCents: number): string {
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-surface rounded-xl px-5 py-4">
+    <div className="bg-surface rounded-lg px-3 py-2">
       <p className="text-kiosk-sm text-slate-500 uppercase tracking-wide mb-1">{label}</p>
       <p className="text-kiosk-md font-bold text-slate-100 truncate">{value}</p>
     </div>

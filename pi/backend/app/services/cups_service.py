@@ -4,6 +4,7 @@ All blocking pycups calls are run in a thread pool to keep the event loop free.
 """
 
 import asyncio
+import time
 
 from app.config import settings
 
@@ -21,6 +22,7 @@ _STATE_PENDING = {3, 4}  # pending / pending-held
 _STATE_PROCESSING = {5, 6}  # processing / processing-stopped
 _STATE_DONE = {9}  # completed
 _STATE_FAILED = {7, 8}  # canceled / aborted
+_STATE_BLOCKED = {4, 6}  # pending-held / processing-stopped
 
 
 def _build_cups_options(options: dict) -> dict[str, str]:
@@ -42,8 +44,16 @@ def _build_cups_options(options: dict) -> dict[str, str]:
 
 def _submit_sync(file_path: str, printer_name: str, options: dict) -> int:
     if not _CUPS_AVAILABLE:
-        raise RuntimeError("pycups is not installed - cannot print")
+        raise RuntimeError(
+            "CUPS Python bindings are unavailable. Install OS package 'python3-cups' "
+            "and recreate venv with --system-site-packages."
+        )
     conn = cups.Connection()
+    available = sorted(conn.getPrinters().keys())
+    if printer_name not in available:
+        raise RuntimeError(
+            f"Configured printer '{printer_name}' was not found in CUPS. Available: {', '.join(available)}"
+        )
     return conn.printFile(
         printer_name,
         file_path,
@@ -53,13 +63,37 @@ def _submit_sync(file_path: str, printer_name: str, options: dict) -> int:
 
 
 def _poll_state_sync(cups_job_id: int) -> str:
+    if not _CUPS_AVAILABLE:
+        raise RuntimeError("CUPS Python bindings are unavailable.")
     conn = cups.Connection()
-    attrs = conn.getJobAttributes(cups_job_id, requested_attributes=["job-state"])
+    try:
+        attrs = conn.getJobAttributes(
+            cups_job_id,
+            requested_attributes=["job-state", "job-state-reasons", "job-state-message"],
+        )
+    except Exception as exc:
+        # Some CUPS setups purge completed jobs quickly and then return not-found.
+        # Treat that as completed to avoid false negatives after successful print.
+        if "not-found" in str(exc).lower():
+            return "DONE"
+        raise
+
     state = attrs.get("job-state", 0)
+    if state in _STATE_BLOCKED:
+        reasons = attrs.get("job-state-reasons") or "unknown"
+        message = attrs.get("job-state-message") or "job held/stopped"
+        raise RuntimeError(f"CUPS job blocked: {message} ({reasons})")
     if state in _STATE_DONE:
         return "DONE"
     if state in _STATE_FAILED:
-        return "FAILED"
+        reasons = attrs.get("job-state-reasons") or "unknown"
+        message = attrs.get("job-state-message") or "job failed"
+        raise RuntimeError(f"CUPS job failed: {message} ({reasons})")
+    if state in _STATE_PENDING or state in _STATE_PROCESSING:
+        return "PRINTING"
+    if state == 0:
+        # Unknown state; keep polling for a short while before timeout.
+        return "PRINTING"
     return "PRINTING"
 
 
@@ -93,11 +127,21 @@ async def submit_to_cups(file_path: str, printer_name: str, options: dict) -> in
     return await asyncio.to_thread(_submit_sync, file_path, printer_name, options)
 
 
-async def wait_for_cups_job(cups_job_id: int, poll_interval: float = 3.0) -> str:
+async def wait_for_cups_job(
+    cups_job_id: int,
+    poll_interval: float = 2.0,
+    timeout_seconds: int = 300,
+) -> str:
     """Poll until the CUPS job reaches a terminal state. Returns 'DONE' or 'FAILED'."""
+    started = time.monotonic()
     while True:
+        if time.monotonic() - started > timeout_seconds:
+            raise TimeoutError(f"CUPS job {cups_job_id} timed out after {timeout_seconds}s")
+
         state = await asyncio.to_thread(_poll_state_sync, cups_job_id)
-        if state in ("DONE", "FAILED"):
+        if state == "DONE":
+            return "DONE"
+        if state == "FAILED":
             return state
         await asyncio.sleep(poll_interval)
 

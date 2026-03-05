@@ -1,0 +1,18 @@
+[Unit]
+Description=PrintProject Pi Backend (%i)
+After=network-online.target cups.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/PrintProject/pi/backend
+EnvironmentFile=/home/%i/PrintProject/pi/backend/.env
+ExecStart=/home/%i/PrintProject/pi/backend/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --log-level info
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -22,7 +22,11 @@ export default function PrintingScreen({ jobId, onDone, onError }: Props) {
           onDone();
         } else if (status.status === "FAILED") {
           clearInterval(intervalRef.current!);
-          onError("Printing failed. Please contact staff.");
+          onError(
+            status.error_msg
+              ? `Printing failed: ${status.error_msg}`
+              : "Printing failed. Please contact staff."
+          );
         }
       } catch {
         // Keep polling through transient local failures.
@@ -39,7 +43,7 @@ export default function PrintingScreen({ jobId, onDone, onError }: Props) {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.3 }}
-      className="w-full h-full flex flex-col items-center justify-center gap-8 bg-surface"
+      className="w-full h-full flex flex-col items-center justify-center gap-4 bg-surface px-4"
     >
       <PrinterAnimation />
 

@@ -6,8 +6,8 @@ import { motion } from 'framer-motion'
  */
 export default function PrinterAnimation() {
   return (
-    <div className="flex items-center justify-center" style={{ width: 200, height: 200 }}>
-      <svg viewBox="0 0 120 120" width={200} height={200} fill="none" xmlns="http://www.w3.org/2000/svg">
+    <div className="flex items-center justify-center" style={{ width: 150, height: 150 }}>
+      <svg viewBox="0 0 120 120" width={150} height={150} fill="none" xmlns="http://www.w3.org/2000/svg">
         {/* Printer body */}
         <rect x="10" y="44" width="100" height="50" rx="8" fill="#1e293b" stroke="#334155" strokeWidth="2" />
 

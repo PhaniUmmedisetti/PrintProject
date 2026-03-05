@@ -1,0 +1,18 @@
+[Unit]
+Description=PrintProject Kiosk Chromium (%i)
+After=graphical.target printproject-frontend-serve@%i.service printproject-pi@%i.service
+Wants=printproject-frontend-serve@%i.service printproject-pi@%i.service
+
+[Service]
+Type=simple
+User=%i
+Environment=DISPLAY=:0
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+ExecStartPre=/bin/sleep 5
+ExecStart=/bin/bash /home/%i/PrintProject/pi/frontend/start-kiosk.sh http://localhost:4173
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target

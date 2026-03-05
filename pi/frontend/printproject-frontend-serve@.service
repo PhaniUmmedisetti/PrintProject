@@ -1,0 +1,15 @@
+[Unit]
+Description=PrintProject Kiosk Frontend Static Server (%i)
+After=network.target printproject-pi@%i.service
+Wants=printproject-pi@%i.service
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/PrintProject/pi/frontend
+ExecStart=/bin/bash /home/%i/PrintProject/pi/frontend/start-frontend-preview.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
