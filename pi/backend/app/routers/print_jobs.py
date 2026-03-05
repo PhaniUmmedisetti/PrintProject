@@ -20,6 +20,25 @@ class PrintRequest(BaseModel):
     code: str
 
 
+def _assert_pdf_looks_valid(file_path: Path) -> None:
+    """Cheap PDF sanity checks to avoid sending corrupt files to CUPS."""
+    size = file_path.stat().st_size
+    if size < 32:
+        raise RuntimeError(f"Downloaded file is too small to be a PDF ({size} bytes)")
+
+    with file_path.open("rb") as fh:
+        head = fh.read(8)
+        fh.seek(max(size - 2048, 0))
+        tail = fh.read()
+
+    if not head.startswith(b"%PDF-"):
+        preview = head.decode("utf-8", errors="replace")
+        raise RuntimeError(f"Downloaded file is not a PDF (header='{preview}')")
+
+    if b"%%EOF" not in tail:
+        raise RuntimeError("Downloaded PDF is incomplete (missing EOF marker)")
+
+
 def _resolve_printer_name(job_summary: dict) -> str:
     color = str(job_summary.get("color", "BW")).upper()
     if color != "BW" and settings.photo_printer_name:
@@ -104,6 +123,7 @@ async def _download_and_convert(job: dict) -> None:
         except OSError:
             size = -1
         logger.info("Job %s downloaded to %s (%d bytes)", job_id, file_path, size)
+        _assert_pdf_looks_valid(file_path)
         await update_job(job_id, "CONVERTING", file_path=str(file_path))
 
         print_path = await convert_to_pdf_if_needed(file_path, "pdf")
