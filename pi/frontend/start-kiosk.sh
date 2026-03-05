@@ -3,6 +3,13 @@ set -euo pipefail
 
 KIOSK_URL="${1:-http://localhost:4173}"
 
+if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+fi
+if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -S "${XDG_RUNTIME_DIR}/bus" ]]; then
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+fi
+
 if command -v chromium >/dev/null 2>&1; then
   BROWSER="chromium"
 elif command -v chromium-browser >/dev/null 2>&1; then
@@ -15,6 +22,7 @@ fi
 exec "${BROWSER}" \
   --kiosk \
   --start-fullscreen \
+  --ozone-platform=x11 \
   --window-size=800,480 \
   --window-position=0,0 \
   --force-device-scale-factor=1 \

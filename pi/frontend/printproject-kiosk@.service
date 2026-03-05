@@ -7,8 +7,7 @@ Wants=printproject-frontend-serve@%i.service printproject-pi@%i.service
 Type=simple
 User=%i
 Environment=DISPLAY=:0
-Environment=XDG_RUNTIME_DIR=/run/user/%U
-Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+Environment=XAUTHORITY=/home/%i/.Xauthority
 ExecStartPre=/bin/sleep 5
 ExecStart=/bin/bash /home/%i/PrintProject/pi/frontend/start-kiosk.sh http://localhost:4173
 Restart=always
