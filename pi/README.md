@@ -7,6 +7,7 @@ from first boot through production and day-to-day operations.
 
 ## Contents
 
+0. [Fast Bootstrap (auto .env provisioning)](#0-fast-bootstrap-auto-env-provisioning)
 1. [System Dependencies](#1-system-dependencies)
 2. [Pi Backend Setup](#2-pi-backend-setup)
 3. [Pi Frontend Setup](#3-pi-frontend-setup)
@@ -15,6 +16,40 @@ from first boot through production and day-to-day operations.
 6. [Verify Startup is Working](#6-verify-startup-is-working)
 7. [Exit Kiosk Mode & Shut Down Safely](#7-exit-kiosk-mode--shut-down-safely)
 8. [Testing Without Real Credentials](#8-testing-without-real-credentials)
+
+---
+
+## 0. Fast Bootstrap (auto .env provisioning)
+
+If your PrintNest API is running, this script logs in as staff, creates the store (if needed),
+registers a new device, and writes both:
+
+- `pi/backend/.env`
+- `pi/frontend/.env`
+
+Run from the repository root:
+
+```bash
+python3 pi/backend/scripts/bootstrap_kiosk_env.py
+```
+
+Optional overrides:
+
+```bash
+python3 pi/backend/scripts/bootstrap_kiosk_env.py \
+  --api-base-url http://localhost:5000 \
+  --store-id store_supermart_01 \
+  --document-printer HP_LaserJet_Pro \
+  --photo-printer Canon_PIXMA_TS8320 \
+  --webapp-url https://your-customer-webapp.example.com
+```
+
+By default, the script tries to read staff bootstrap credentials from:
+
+- `../printnest/infra/.env` (sibling repo)
+- `C:\Users\phani\Desktop\printnest\infra\.env`
+
+or from `PRINTNEST_ENV_FILE` if you set it.
 
 ---
 
