@@ -15,20 +15,19 @@ export default function CodeKeypad({ value, onChange, shaking, errorMsg }: Props
     if (value.length < CODE_LENGTH) onChange(value + ch);
   };
   const del = () => onChange(value.slice(0, -1));
-  const clear = () => onChange("");
 
   return (
-    <div className="flex flex-col items-center gap-5 w-full max-w-lg mx-auto">
+    <div className="flex flex-col items-center gap-5 w-full max-w-xl mx-auto">
       <motion.div
         animate={shaking ? { x: [0, -12, 12, -8, 8, 0] } : {}}
         transition={{ duration: 0.45 }}
-        className="flex gap-3"
+        className="flex gap-4"
       >
         {Array.from({ length: CODE_LENGTH }).map((_, i) => (
           <div
             key={i}
             className={`
-              w-16 h-20 rounded-xl flex items-center justify-center
+              w-[clamp(3.5rem,9vw,4.5rem)] h-[clamp(4.5rem,11vw,5.5rem)] rounded-2xl flex items-center justify-center
               text-kiosk-xl font-black tracking-widest
               border-2 transition-colors duration-200
               ${
@@ -55,21 +54,29 @@ export default function CodeKeypad({ value, onChange, shaking, errorMsg }: Props
         )}
       </div>
 
-      <div className="flex flex-col gap-3 w-full">
-        {[0, 3, 6].map((start) => (
-          <div key={start} className="flex gap-3 justify-center">
+      <div className="flex flex-col gap-4 w-full">
+        <div className="flex gap-4 justify-center items-center">
+          {NUM_KEYS.slice(0, 3).map((k) => (
+            <Key key={k} label={k} onPress={append} />
+          ))}
+          <Key
+            label="X"
+            onPress={del}
+            accent
+            ariaLabel="Delete last digit"
+            disabled={value.length === 0}
+          />
+        </div>
+
+        {[3, 6].map((start) => (
+          <div key={start} className="flex gap-4 justify-center">
             {NUM_KEYS.slice(start, start + 3).map((k) => (
               <Key key={k} label={k} onPress={append} />
             ))}
           </div>
         ))}
-        <div className="flex gap-3 justify-center">
+        <div className="flex gap-4 justify-center">
           <Key label="0" onPress={append} wide />
-        </div>
-
-        <div className="flex gap-3 justify-center mt-1">
-          <Key label="Del" onPress={del} accent />
-          <Key label="Clear" onPress={clear} accent wide />
         </div>
       </div>
     </div>
@@ -81,25 +88,33 @@ function Key({
   onPress,
   accent = false,
   wide = false,
+  ariaLabel,
+  disabled = false,
 }: {
   label: string;
   onPress: (v: string) => void;
   accent?: boolean;
   wide?: boolean;
+  ariaLabel?: string;
+  disabled?: boolean;
 }) {
   return (
     <motion.button
       whileTap={{ scale: 0.88 }}
       onClick={() => onPress(label)}
+      aria-label={ariaLabel ?? label}
+      disabled={disabled}
       className={`
-        ${wide ? "w-40" : "w-[4.5rem]"} h-16 rounded-xl
-        text-kiosk-md font-bold
+        ${wide ? "w-[clamp(16.5rem,43vw,20rem)]" : "w-[clamp(5rem,13vw,6.25rem)]"} h-[clamp(5rem,13vw,6.25rem)] rounded-2xl
+        text-[clamp(2rem,5vw,3rem)] font-black
         transition-colors duration-100
         touch-target
         ${
-          accent
-            ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
-            : "bg-surface-raised hover:bg-slate-600 text-slate-100 active:bg-accent active:text-slate-950"
+          disabled
+            ? "bg-slate-800 text-slate-600 cursor-not-allowed"
+            : accent
+              ? "bg-slate-700 hover:bg-slate-600 text-slate-200 active:bg-slate-500"
+              : "bg-surface-raised hover:bg-slate-600 text-slate-100 active:bg-accent active:text-slate-950"
         }
       `}
     >
