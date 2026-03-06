@@ -1,6 +1,5 @@
 import { motion } from "framer-motion";
 
-const NUM_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
 const CODE_LENGTH = 6;
 
 interface Props {
@@ -54,30 +53,31 @@ export default function CodeKeypad({ value, onChange, shaking, errorMsg }: Props
         )}
       </div>
 
-      <div className="flex flex-col gap-4 w-full">
-        <div className="flex gap-4 justify-center items-center">
-          {NUM_KEYS.slice(0, 3).map((k) => (
-            <Key key={k} label={k} onPress={append} />
-          ))}
-          <Key
-            label="X"
-            onPress={del}
-            accent
-            ariaLabel="Delete last digit"
-            disabled={value.length === 0}
-          />
-        </div>
+      <div className="grid grid-cols-4 gap-4 w-fit mx-auto">
+        <Key label="1" onPress={append} />
+        <Key label="2" onPress={append} />
+        <Key label="3" onPress={append} />
+        <Key
+          label="backspace"
+          onPress={del}
+          accent
+          icon="backspace"
+          ariaLabel="Delete last digit"
+          disabled={value.length === 0}
+        />
 
-        {[3, 6].map((start) => (
-          <div key={start} className="flex gap-4 justify-center">
-            {NUM_KEYS.slice(start, start + 3).map((k) => (
-              <Key key={k} label={k} onPress={append} />
-            ))}
-          </div>
-        ))}
-        <div className="flex gap-4 justify-center">
-          <Key label="0" onPress={append} wide />
-        </div>
+        <Key label="4" onPress={append} />
+        <Key label="5" onPress={append} />
+        <Key label="6" onPress={append} />
+        <div />
+
+        <Key label="7" onPress={append} />
+        <Key label="8" onPress={append} />
+        <Key label="9" onPress={append} />
+        <div />
+
+        <Key label="0" onPress={append} wide className="col-span-3" />
+        <div />
       </div>
     </div>
   );
@@ -90,6 +90,8 @@ function Key({
   wide = false,
   ariaLabel,
   disabled = false,
+  icon,
+  className = "",
 }: {
   label: string;
   onPress: (v: string) => void;
@@ -97,6 +99,8 @@ function Key({
   wide?: boolean;
   ariaLabel?: string;
   disabled?: boolean;
+  icon?: "backspace";
+  className?: string;
 }) {
   return (
     <motion.button
@@ -106,9 +110,11 @@ function Key({
       disabled={disabled}
       className={`
         ${wide ? "w-[clamp(16.5rem,43vw,20rem)]" : "w-[clamp(5rem,13vw,6.25rem)]"} h-[clamp(5rem,13vw,6.25rem)] rounded-2xl
+        flex items-center justify-center
         text-[clamp(2rem,5vw,3rem)] font-black
         transition-colors duration-100
         touch-target
+        ${className}
         ${
           disabled
             ? "bg-slate-800 text-slate-600 cursor-not-allowed"
@@ -118,7 +124,26 @@ function Key({
         }
       `}
     >
-      {label}
+      {icon === "backspace" ? <BackspaceIcon /> : label}
     </motion.button>
+  );
+}
+
+function BackspaceIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="w-[clamp(2.2rem,5.5vw,3rem)] h-[clamp(2.2rem,5.5vw,3rem)]"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M21 6H9.2a2 2 0 0 0-1.5.67L3 12l4.7 5.33A2 2 0 0 0 9.2 18H21a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1Z" />
+      <path d="m11 9 5 6" />
+      <path d="m16 9-5 6" />
+    </svg>
   );
 }
