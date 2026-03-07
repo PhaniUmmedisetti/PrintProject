@@ -1,6 +1,6 @@
 import { useReducer } from 'react'
 import { AnimatePresence } from 'framer-motion'
-import type { StartPrintResponse } from './api/piBackend'
+import type { KioskErrorState, StartPrintResponse } from './api/piBackend'
 
 import LandingScreen from './screens/LandingScreen'
 import QRScreen from './screens/QRScreen'
@@ -17,7 +17,7 @@ type Screen = 'LANDING' | 'QR_CODE' | 'KEYPAD' | 'PREVIEW' | 'PRINTING' | 'SUCCE
 interface AppState {
   screen: Screen
   job: StartPrintResponse | null
-  errorMsg: string
+  error: KioskErrorState | null
 }
 
 type Action =
@@ -26,7 +26,7 @@ type Action =
   | { type: 'CODE_ACCEPTED'; job: StartPrintResponse }
   | { type: 'CONFIRM_PRINT' }
   | { type: 'PRINT_DONE' }
-  | { type: 'ERROR'; msg: string }
+  | { type: 'ERROR'; error: KioskErrorState }
   | { type: 'RETRY' }
   | { type: 'RESET' }
 
@@ -37,14 +37,19 @@ function reducer(state: AppState, action: Action): AppState {
     case 'CODE_ACCEPTED': return { ...state, screen: 'PREVIEW', job: action.job }
     case 'CONFIRM_PRINT': return { ...state, screen: 'PRINTING' }
     case 'PRINT_DONE': return { ...state, screen: 'SUCCESS' }
-    case 'ERROR':      return { ...state, screen: 'ERROR', errorMsg: action.msg }
-    case 'RETRY':      return { ...state, screen: 'KEYPAD', job: null, errorMsg: '' }
-    case 'RESET':      return { screen: 'LANDING', job: null, errorMsg: '' }
+    case 'ERROR':      return { ...state, screen: 'ERROR', error: action.error }
+    case 'RETRY':      return {
+      ...state,
+      screen: state.error?.retryTarget === 'LANDING' ? 'LANDING' : 'KEYPAD',
+      job: null,
+      error: null,
+    }
+    case 'RESET':      return { screen: 'LANDING', job: null, error: null }
     default:           return state
   }
 }
 
-const initial: AppState = { screen: 'LANDING', job: null, errorMsg: '' }
+const initial: AppState = { screen: 'LANDING', job: null, error: null }
 
 // ── Root component ───────────────────────────────────────────────────────────
 
@@ -60,18 +65,18 @@ export default function App() {
       case 'KEYPAD':   return <KeypadScreen
                                 onBack={() => dispatch({ type: 'GO_QR' })}
                                 onCodeAccepted={job => dispatch({ type: 'CODE_ACCEPTED', job })}
-                                onError={msg => dispatch({ type: 'ERROR', msg })} />
+                                onError={error => dispatch({ type: 'ERROR', error })} />
       case 'PREVIEW':  return <PreviewScreen
                                 job={state.job!}
                                 onConfirm={() => dispatch({ type: 'CONFIRM_PRINT' })}
-                                onError={msg => dispatch({ type: 'ERROR', msg })} />
+                                onError={error => dispatch({ type: 'ERROR', error })} />
       case 'PRINTING': return <PrintingScreen
                                 jobId={state.job!.job_id}
                                 onDone={() => dispatch({ type: 'PRINT_DONE' })}
-                                onError={msg => dispatch({ type: 'ERROR', msg })} />
+                                onError={error => dispatch({ type: 'ERROR', error })} />
       case 'SUCCESS':  return <SuccessScreen onDone={() => dispatch({ type: 'RESET' })} />
       case 'ERROR':    return <ErrorScreen
-                                message={state.errorMsg}
+                                {...state.error!}
                                 onRetry={() => dispatch({ type: 'RETRY' })}
                                 onCancel={() => dispatch({ type: 'RESET' })} />
     }

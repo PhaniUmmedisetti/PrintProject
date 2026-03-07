@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 
-import { confirmPrint, getJobStatus } from "../api/piBackend";
-import type { StartPrintResponse } from "../api/piBackend";
+import { buildJobFailureError, buildSimpleError, confirmPrint, getJobStatus } from "../api/piBackend";
+import type { KioskErrorState, StartPrintResponse } from "../api/piBackend";
 
 interface Props {
   job: StartPrintResponse;
   onConfirm: () => void;
-  onError: (msg: string) => void;
+  onError: (error: KioskErrorState) => void;
 }
 
 export default function PreviewScreen({ job, onConfirm, onError }: Props) {
@@ -25,11 +25,7 @@ export default function PreviewScreen({ job, onConfirm, onError }: Props) {
           setReady(true);
         } else if (status.status === "FAILED") {
           clearInterval(intervalRef.current!);
-          onError(
-            status.error_msg
-              ? `Failed to prepare file: ${status.error_msg}`
-              : "Failed to prepare your file. Please try again or contact staff."
-          );
+          onError(buildJobFailureError(status));
         }
       } catch {
         // Keep polling through transient local failures.
@@ -45,7 +41,15 @@ export default function PreviewScreen({ job, onConfirm, onError }: Props) {
       await confirmPrint(job.job_id);
       onConfirm();
     } catch {
-      onError("Failed to start printing. Please contact staff.");
+      onError(
+        buildSimpleError("Could Not Start Printing", "Failed to start printing. Please try again.", {
+          retryLabel: "Try Again",
+          cancelLabel: "Home",
+          retryTarget: "KEYPAD",
+        }),
+      );
+    } finally {
+      setConfirming(false);
     }
   };
 

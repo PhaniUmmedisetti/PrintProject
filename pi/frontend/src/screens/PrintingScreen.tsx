@@ -2,12 +2,13 @@ import { useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 
 import PrinterAnimation from "../components/PrinterAnimation";
-import { getJobStatus } from "../api/piBackend";
+import { buildJobFailureError, getJobStatus } from "../api/piBackend";
+import type { KioskErrorState } from "../api/piBackend";
 
 interface Props {
   jobId: string;
   onDone: () => void;
-  onError: (msg: string) => void;
+  onError: (error: KioskErrorState) => void;
 }
 
 export default function PrintingScreen({ jobId, onDone, onError }: Props) {
@@ -22,11 +23,7 @@ export default function PrintingScreen({ jobId, onDone, onError }: Props) {
           onDone();
         } else if (status.status === "FAILED") {
           clearInterval(intervalRef.current!);
-          onError(
-            status.error_msg
-              ? `Printing failed: ${status.error_msg}`
-              : "Printing failed. Please contact staff."
-          );
+          onError(buildJobFailureError(status));
         }
       } catch {
         // Keep polling through transient local failures.

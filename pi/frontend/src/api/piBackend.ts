@@ -21,9 +21,19 @@ export interface JobStatus {
   job_summary: JobSummary | null;
   cups_job_id: string | null;
   error_msg: string | null;
+  failure_code: string | null;
+  retryable: boolean | null;
   file_path: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface KioskErrorState {
+  title: string;
+  message: string;
+  retryLabel?: string;
+  cancelLabel?: string;
+  retryTarget?: "KEYPAD" | "LANDING";
 }
 
 export async function startPrint(code: string): Promise<StartPrintResponse> {
@@ -72,4 +82,55 @@ export class PrinterNotReadyError extends Error {
   constructor(message: string) {
     super(message);
   }
+}
+
+export function buildJobFailureError(status: Pick<JobStatus, "error_msg" | "failure_code" | "retryable">): KioskErrorState {
+  const baseMessage = String(status.error_msg ?? "Printing failed.");
+
+  if (status.retryable) {
+    const issue =
+      status.failure_code === "PAPER_JAM"
+        ? "The printer jammed before your full document finished."
+        : status.failure_code === "PAPER_OUT"
+          ? "The printer ran out of paper before your full document finished."
+          : status.failure_code === "DOOR_OPEN"
+            ? "The printer was opened before your full document finished."
+            : status.failure_code === "CARTRIDGE_MISSING"
+              ? "The printer cartridge needs attention before your full document can finish."
+              : status.failure_code === "INK_EMPTY"
+                ? "The printer ran out of ink before your full document finished."
+                : status.failure_code === "DOWNLOAD_FAILED"
+                  ? "The file could not be prepared for printing."
+                  : "Printing stopped before your full document finished.";
+
+    return {
+      title: "Print Interrupted",
+      message: `${issue} Use the same OTP to print again from the start.`,
+      retryLabel: "Use Same OTP",
+      cancelLabel: "Home",
+      retryTarget: "KEYPAD",
+    };
+  }
+
+  return {
+    title: "Printing Failed",
+    message: baseMessage,
+    retryLabel: "Try Again",
+    cancelLabel: "Home",
+    retryTarget: "KEYPAD",
+  };
+}
+
+export function buildSimpleError(
+  title: string,
+  message: string,
+  options?: Partial<Pick<KioskErrorState, "retryLabel" | "cancelLabel" | "retryTarget">>,
+): KioskErrorState {
+  return {
+    title,
+    message,
+    retryLabel: options?.retryLabel ?? "Try Again",
+    cancelLabel: options?.cancelLabel ?? "Home",
+    retryTarget: options?.retryTarget ?? "KEYPAD",
+  };
 }

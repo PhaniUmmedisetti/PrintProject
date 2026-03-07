@@ -1,12 +1,19 @@
 import { motion } from 'framer-motion'
+import type { KioskErrorState } from '../api/piBackend'
 
-interface Props {
-  message: string
+interface Props extends KioskErrorState {
   onRetry: () => void
   onCancel: () => void
 }
 
-export default function ErrorScreen({ message, onRetry, onCancel }: Props) {
+export default function ErrorScreen({
+  title,
+  message,
+  retryLabel,
+  cancelLabel,
+  onRetry,
+  onCancel,
+}: Props) {
   return (
     <motion.div
       key="error"
@@ -16,14 +23,13 @@ export default function ErrorScreen({ message, onRetry, onCancel }: Props) {
       transition={{ duration: 0.3 }}
       className="w-full h-full flex flex-col items-center justify-center gap-8 bg-surface"
     >
-      {/* Error icon */}
       <motion.div
         initial={{ scale: 0 }}
         animate={{ scale: 1 }}
         transition={{ type: 'spring', stiffness: 220, damping: 14 }}
         className="w-36 h-36 rounded-full bg-red-500/20 flex items-center justify-center"
       >
-        <span className="text-[4rem] leading-none">✕</span>
+        <span className="text-[4rem] leading-none">X</span>
       </motion.div>
 
       <motion.div
@@ -32,7 +38,7 @@ export default function ErrorScreen({ message, onRetry, onCancel }: Props) {
         transition={{ delay: 0.15 }}
         className="flex flex-col items-center gap-3 px-8 max-w-xl text-center"
       >
-        <h1 className="text-kiosk-xl font-black text-slate-100">Something went wrong</h1>
+        <h1 className="text-kiosk-xl font-black text-slate-100">{title}</h1>
         <p className="text-kiosk-md text-slate-400">{message}</p>
       </motion.div>
 
@@ -51,20 +57,22 @@ export default function ErrorScreen({ message, onRetry, onCancel }: Props) {
             transition-all duration-150 touch-target
           "
         >
-          Cancel
+          {cancelLabel ?? 'Home'}
         </button>
-        <button
-          onClick={onRetry}
-          className="
-            bg-accent hover:bg-accent-hover
-            text-slate-950 font-black
-            text-kiosk-md px-10 py-5 rounded-2xl
-            shadow-lg shadow-accent/30
-            transition-all duration-150 touch-target
-          "
-        >
-          Try Again
-        </button>
+        {retryLabel && (
+          <button
+            onClick={onRetry}
+            className="
+              bg-accent hover:bg-accent-hover
+              text-slate-950 font-black
+              text-kiosk-md px-10 py-5 rounded-2xl
+              shadow-lg shadow-accent/30
+              transition-all duration-150 touch-target
+            "
+          >
+            {retryLabel}
+          </button>
+        )}
       </motion.div>
     </motion.div>
   )
