@@ -7,10 +7,11 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
 from app.config import settings
-from app.database import create_job, get_job, update_job
+from app.database import create_job, get_job, set_terminal_event, update_job
 from app.services import cloud_api, cups_service
 from app.services.converter import convert_to_pdf_if_needed
 from app.services.downloader import download_file
+from app.tasks.cloud_sync import sync_terminal_event_payload
 
 router = APIRouter(prefix="/local", tags=["print"])
 logger = logging.getLogger(__name__)
@@ -18,6 +19,37 @@ logger = logging.getLogger(__name__)
 
 class PrintRequest(BaseModel):
     code: str
+
+
+def _has_reason(reasons: list[str], *needles: str) -> bool:
+    lowered_needles = tuple(needle.lower() for needle in needles)
+    for reason in reasons:
+        text = reason.lower()
+        if any(needle in text for needle in lowered_needles):
+            return True
+    return False
+
+
+def _derive_failure_code(result: dict) -> str:
+    reasons = [str(reason) for reason in result.get("reasons") or []]
+    message = str(result.get("message") or "")
+    all_pages_printed = bool((result.get("metrics") or {}).get("allPagesPrinted"))
+
+    if _has_reason(reasons, "jam", "paper-jam") or "jam" in message.lower():
+        return "PAPER_JAM"
+    if _has_reason(reasons, "media-empty", "paper-out", "paper-empty", "media-needed"):
+        return "PAPER_OUT"
+    if _has_reason(reasons, "door-open", "cover-open"):
+        return "DOOR_OPEN"
+    if _has_reason(reasons, "cartridge-missing", "marker-missing"):
+        return "CARTRIDGE_MISSING"
+    if _has_reason(reasons, "marker-supply-empty", "marker-empty", "toner-empty", "ink-empty"):
+        return "INK_EMPTY"
+    if _has_reason(reasons, "marker-supply-low", "marker-low", "toner-low", "ink-low"):
+        return "INK_LOW"
+    if not all_pages_printed:
+        return "PARTIAL_PRINT"
+    return "PRINT_FAILED"
 
 
 def _assert_pdf_looks_valid(file_path: Path) -> None:
@@ -109,7 +141,8 @@ async def get_status(job_id: str):
 @router.get("/printers")
 async def get_printers():
     states = await cups_service.get_printer_states()
-    return {"printers": states}
+    details = await cups_service.get_printer_details()
+    return {"printers": states, "details": details}
 
 
 async def _download_and_convert(job: dict) -> None:
@@ -130,17 +163,23 @@ async def _download_and_convert(job: dict) -> None:
         logger.info("Job %s ready for print path=%s", job_id, print_path)
         await update_job(job_id, "READY", file_path=str(print_path))
     except Exception as exc:
-        await update_job(job_id, "FAILED", error_msg=str(exc))
-        try:
-            await cloud_api.mark_failed(
-                job_id,
-                cups_job_id=None,
-                failure_code="DOWNLOAD_FAILED",
-                failure_message=str(exc),
-                is_retryable=True,
-            )
-        except Exception:
-            pass
+        failure_message = str(exc)
+        await update_job(
+            job_id,
+            "FAILED",
+            error_msg=failure_message,
+            failure_code="DOWNLOAD_FAILED",
+            retryable=True,
+        )
+        payload = {
+            "jobId": job_id,
+            "cupsJobId": None,
+            "failureCode": "DOWNLOAD_FAILED",
+            "failureMessage": failure_message,
+            "isRetryable": True,
+        }
+        await set_terminal_event(job_id, "FAILED", payload)
+        await sync_terminal_event_payload(job_id, "FAILED", payload)
         if job_dir.exists() and not settings.keep_failed_job_files:
             shutil.rmtree(job_dir, ignore_errors=True)
         elif job_dir.exists():
@@ -155,6 +194,7 @@ async def _submit_and_monitor(
 ) -> None:
     job_dir = Path(settings.temp_dir) / job_id
     cups_job_id_str: str | None = None
+    print_started = False
 
     try:
         await update_job(job_id, "PRINTING")
@@ -173,32 +213,63 @@ async def _submit_and_monitor(
         )
         await update_job(job_id, "PRINTING", cups_job_id=cups_job_id_str)
         await cloud_api.mark_printing_started(job_id, cups_job_id_str, printer_name)
+        print_started = True
         result = await cups_service.wait_for_cups_job(cups_job_id)
+        metrics = result.get("metrics")
 
-        final = "DONE" if result == "DONE" else "FAILED"
-        await update_job(job_id, final)
-        if final == "DONE":
-            await cloud_api.mark_completed(job_id, cups_job_id_str)
-        else:
-            await cloud_api.mark_failed(
-                job_id,
-                cups_job_id=cups_job_id_str,
-                failure_code="CUPS_FAILED",
-                failure_message="CUPS reported a failed print job.",
-                is_retryable=False,
-            )
+        if result.get("status") == "DONE":
+            await update_job(job_id, "DONE")
+            payload = {
+                "jobId": job_id,
+                "cupsJobId": cups_job_id_str,
+                "metrics": metrics,
+            }
+            try:
+                await set_terminal_event(job_id, "COMPLETED", payload)
+                await sync_terminal_event_payload(job_id, "COMPLETED", payload)
+            except Exception as exc:
+                logger.warning("Could not enqueue/sync completed event for job %s: %s", job_id, exc)
+            return
+
+        all_pages_printed = bool((metrics or {}).get("allPagesPrinted"))
+        failure_code = _derive_failure_code(result)
+        failure_message = str(result.get("message") or "CUPS did not complete the full document print.")
+        is_retryable = not all_pages_printed
+        await update_job(
+            job_id,
+            "FAILED",
+            error_msg=failure_message,
+            failure_code=failure_code,
+            retryable=is_retryable,
+        )
+        payload = {
+            "jobId": job_id,
+            "cupsJobId": cups_job_id_str,
+            "failureCode": failure_code,
+            "failureMessage": failure_message,
+            "isRetryable": is_retryable,
+        }
+        await set_terminal_event(job_id, "FAILED", payload)
+        await sync_terminal_event_payload(job_id, "FAILED", payload)
     except Exception as exc:
-        await update_job(job_id, "FAILED", error_msg=str(exc))
-        try:
-            await cloud_api.mark_failed(
-                job_id,
-                cups_job_id=cups_job_id_str,
-                failure_code="PRINT_FAILED",
-                failure_message=str(exc),
-                is_retryable=False,
-            )
-        except Exception:
-            pass
+        failure_message = str(exc)
+        is_retryable = print_started or cups_job_id_str is not None
+        await update_job(
+            job_id,
+            "FAILED",
+            error_msg=failure_message,
+            failure_code="PRINT_FAILED",
+            retryable=is_retryable,
+        )
+        payload = {
+            "jobId": job_id,
+            "cupsJobId": cups_job_id_str,
+            "failureCode": "PRINT_FAILED",
+            "failureMessage": failure_message,
+            "isRetryable": is_retryable,
+        }
+        await set_terminal_event(job_id, "FAILED", payload)
+        await sync_terminal_event_payload(job_id, "FAILED", payload)
     finally:
         should_cleanup = True
         if settings.keep_failed_job_files:

@@ -150,16 +150,60 @@ async def mark_failed(
     response.raise_for_status()
 
 
-async def post_heartbeat(printer_states: dict) -> None:
+async def sync_terminal_event(event_type: str, payload: dict) -> None:
+    event = event_type.upper()
+    if event == "COMPLETED":
+        await mark_completed(
+            payload["jobId"],
+            payload.get("cupsJobId"),
+            metrics=payload.get("metrics"),
+        )
+        return
+    if event == "FAILED":
+        await mark_failed(
+            payload["jobId"],
+            payload.get("cupsJobId"),
+            str(payload.get("failureCode") or "PRINT_FAILED"),
+            str(payload.get("failureMessage") or "Print failed."),
+            bool(payload.get("isRetryable")),
+        )
+        return
+    raise ValueError(f"Unsupported terminal event type: {event_type}")
+
+
+def _aggregate_bool(values: list[bool | None]) -> bool | None:
+    if any(value is True for value in values):
+        return True
+    if any(value is False for value in values):
+        return False
+    return None
+
+
+def _aggregate_ink_state(values: list[str]) -> str:
+    if any(value == "EMPTY" for value in values):
+        return "EMPTY"
+    if any(value == "LOW" for value in values):
+        return "LOW"
+    if any(value == "OK" for value in values):
+        return "OK"
+    return "UNKNOWN"
+
+
+async def post_heartbeat(printer_details: dict) -> None:
     """Send normalized printer health to the PrintNest heartbeat endpoint."""
-    states = {name: state for name, state in printer_states.items() if name}
-    is_printing = any(state == "printing" for state in states.values())
-    any_online = any(state in {"idle", "printing"} for state in states.values())
-    all_offline = bool(states) and all(state == "offline" for state in states.values())
+    details = {name: detail for name, detail in printer_details.items() if name}
+    states = {name: detail.get("state", "unknown") for name, detail in details.items()}
+    is_printing = any(detail.get("operational_state") == "PRINTING" for detail in details.values())
+    has_attention = any(detail.get("operational_state") == "ERROR" for detail in details.values())
+    any_online = any(detail.get("connection_state") == "ONLINE" for detail in details.values())
+    all_offline = bool(details) and all(detail.get("connection_state") == "OFFLINE" for detail in details.values())
 
     if is_printing:
         connection_state = "ONLINE"
         operational_state = "PRINTING"
+    elif has_attention:
+        connection_state = "ONLINE" if any_online else "UNKNOWN"
+        operational_state = "ERROR"
     elif any_online:
         connection_state = "ONLINE"
         operational_state = "IDLE"
@@ -171,6 +215,10 @@ async def post_heartbeat(printer_states: dict) -> None:
         operational_state = "UNKNOWN"
 
     printer_model = ", ".join(sorted(states.keys())) if states else None
+    paper_out = _aggregate_bool([detail.get("paper_out") for detail in details.values()])
+    door_open = _aggregate_bool([detail.get("door_open") for detail in details.values()])
+    cartridge_missing = _aggregate_bool([detail.get("cartridge_missing") for detail in details.values()])
+    ink_state = _aggregate_ink_state([str(detail.get("ink_state", "UNKNOWN")) for detail in details.values()])
     payload = {
         "storeId": settings.store_id,
         "capabilitiesJson": json.dumps({"printers": list(states.keys())}),
@@ -178,11 +226,11 @@ async def post_heartbeat(printer_states: dict) -> None:
             "printerModel": printer_model,
             "connectionState": connection_state,
             "operationalState": operational_state,
-            "paperOut": None,
-            "doorOpen": None,
-            "cartridgeMissing": None,
-            "inkState": "UNKNOWN",
-            "rawStatusJson": json.dumps(states),
+            "paperOut": paper_out,
+            "doorOpen": door_open,
+            "cartridgeMissing": cartridge_missing,
+            "inkState": ink_state,
+            "rawStatusJson": json.dumps(details),
         },
     }
 
