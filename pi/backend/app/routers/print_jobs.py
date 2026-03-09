@@ -194,7 +194,6 @@ async def _submit_and_monitor(
 ) -> None:
     job_dir = Path(settings.temp_dir) / job_id
     cups_job_id_str: str | None = None
-    print_started = False
 
     try:
         await update_job(job_id, "PRINTING")
@@ -213,7 +212,6 @@ async def _submit_and_monitor(
         )
         await update_job(job_id, "PRINTING", cups_job_id=cups_job_id_str)
         await cloud_api.mark_printing_started(job_id, cups_job_id_str, printer_name)
-        print_started = True
         result = await cups_service.wait_for_cups_job(cups_job_id)
         metrics = result.get("metrics")
 
@@ -231,10 +229,11 @@ async def _submit_and_monitor(
                 logger.warning("Could not enqueue/sync completed event for job %s: %s", job_id, exc)
             return
 
-        all_pages_printed = bool((metrics or {}).get("allPagesPrinted"))
         failure_code = _derive_failure_code(result)
         failure_message = str(result.get("message") or "CUPS did not complete the full document print.")
-        is_retryable = not all_pages_printed
+        # Only a confirmed COMPLETED event should consume the OTP. Any local
+        # print failure keeps the same OTP reusable from the start.
+        is_retryable = True
         await update_job(
             job_id,
             "FAILED",
@@ -253,7 +252,9 @@ async def _submit_and_monitor(
         await sync_terminal_event_payload(job_id, "FAILED", payload)
     except Exception as exc:
         failure_message = str(exc)
-        is_retryable = print_started or cups_job_id_str is not None
+        # Treat every local failure as retryable so the user can re-enter the
+        # same OTP unless we explicitly reached COMPLETED.
+        is_retryable = True
         await update_job(
             job_id,
             "FAILED",
