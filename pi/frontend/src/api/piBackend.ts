@@ -74,7 +74,7 @@ export async function getPrinters(): Promise<Record<string, string>> {
 
 export class InvalidCodeError extends Error {
   constructor() {
-    super("Invalid or expired code");
+    super("Invalid code");
   }
 }
 
@@ -105,7 +105,7 @@ export function buildJobFailureError(status: Pick<JobStatus, "error_msg" | "fail
 
     return {
       title: "Print Interrupted",
-      message: `${issue} Use the same OTP to print again from the start.`,
+      message: `${issue} Your same OTP is still valid. Use it again to print from the start.`,
       retryLabel: "Use Same OTP",
       cancelLabel: "Home",
       retryTarget: "KEYPAD",

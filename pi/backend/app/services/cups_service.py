@@ -4,6 +4,7 @@ All blocking pycups calls are run in a thread pool to keep the event loop free.
 """
 
 import asyncio
+import logging
 import time
 
 from app.config import settings
@@ -15,6 +16,9 @@ try:
 except ImportError:
     # pycups is Linux-only; allows the app to start on dev machines without CUPS
     _CUPS_AVAILABLE = False
+
+
+logger = logging.getLogger(__name__)
 
 
 # CUPS job-state codes (RFC 2911)
@@ -146,18 +150,23 @@ def _as_int(value: object) -> int | None:
         return None
 
 
-def _extract_job_metrics(attrs: dict, *, assume_complete: bool) -> dict:
+def _extract_job_metrics(attrs: dict) -> dict:
     pages_expected = _as_int(attrs.get("job-impressions"))
     pages_printed = _as_int(attrs.get("job-impressions-completed"))
     sheets_expected = _as_int(attrs.get("job-media-sheets"))
     sheets_printed = _as_int(attrs.get("job-media-sheets-completed"))
 
-    if pages_expected is not None and pages_printed is not None:
+    if pages_expected is not None and pages_printed is not None and pages_expected > 0:
         all_pages_printed = pages_printed >= pages_expected
-    elif sheets_expected is not None and sheets_printed is not None:
+        completion_verified = True
+    elif sheets_expected is not None and sheets_printed is not None and sheets_expected > 0:
         all_pages_printed = sheets_printed >= sheets_expected
+        completion_verified = True
     else:
-        all_pages_printed = assume_complete
+        # Strict rule: only treat the job as fully printed when CUPS gives us
+        # explicit completion counters we can compare.
+        all_pages_printed = False
+        completion_verified = False
 
     return {
         "pagesExpected": pages_expected,
@@ -165,6 +174,22 @@ def _extract_job_metrics(attrs: dict, *, assume_complete: bool) -> dict:
         "sheetsExpected": sheets_expected,
         "sheetsPrinted": sheets_printed,
         "allPagesPrinted": all_pages_printed,
+        "completionVerified": completion_verified,
+    }
+
+
+def _summarize_result(result: dict) -> dict:
+    metrics = result.get("metrics") or {}
+    return {
+        "status": result.get("status"),
+        "message": result.get("message"),
+        "reasons": result.get("reasons") or [],
+        "pagesExpected": metrics.get("pagesExpected"),
+        "pagesPrinted": metrics.get("pagesPrinted"),
+        "sheetsExpected": metrics.get("sheetsExpected"),
+        "sheetsPrinted": metrics.get("sheetsPrinted"),
+        "allPagesPrinted": metrics.get("allPagesPrinted"),
+        "completionVerified": metrics.get("completionVerified"),
     }
 
 
@@ -280,50 +305,69 @@ def _poll_state_sync(cups_job_id: int) -> dict:
             requested_attributes=_JOB_ATTRIBUTES,
         )
     except Exception as exc:
-        # Some CUPS setups purge completed jobs quickly and then return not-found.
-        # Treat that as completed to avoid false negatives after successful print.
+        # Never assume success when the job disappears from CUPS history. If we
+        # cannot verify the final page counters, keep the OTP reusable.
         if "not-found" in str(exc).lower():
-            return {
-                "status": "DONE",
-                "message": "CUPS job disappeared from history; assuming complete.",
-                "reasons": ["job-not-found"],
-                "metrics": _extract_job_metrics({}, assume_complete=True),
+            result = {
+                "status": "FAILED",
+                "message": "CUPS job disappeared before full print completion could be verified.",
+                "reasons": ["job-not-found", "completion-unverified"],
+                "metrics": _extract_job_metrics({}),
             }
+            logger.warning("CUPS job %s lookup returned not-found: %s", cups_job_id, _summarize_result(result))
+            return result
         raise
 
     state = attrs.get("job-state", 0)
     reasons = _as_string_list(attrs.get("job-state-reasons"))
     message = attrs.get("job-state-message") or None
-    metrics = _extract_job_metrics(attrs, assume_complete=state in _STATE_DONE)
+    metrics = _extract_job_metrics(attrs)
 
     if state in _STATE_BLOCKED:
-        return {
+        result = {
             "status": "BLOCKED",
             "message": str(message or "job held/stopped"),
             "reasons": reasons or ["unknown"],
             "metrics": metrics,
         }
+        logger.warning("CUPS job %s entered blocked state: %s", cups_job_id, _summarize_result(result))
+        return result
     if state in _STATE_DONE:
+        if not metrics["completionVerified"]:
+            result = {
+                "status": "FAILED",
+                "message": "CUPS reported completion but full-page completion could not be verified.",
+                "reasons": _dedupe_preserve_order(reasons + ["completion-unverified"]),
+                "metrics": metrics,
+            }
+            logger.warning("CUPS job %s reported done without verifiable completion: %s", cups_job_id, _summarize_result(result))
+            return result
         if not metrics["allPagesPrinted"]:
-            return {
+            result = {
                 "status": "FAILED",
                 "message": "CUPS marked the job complete before all pages were printed.",
                 "reasons": _dedupe_preserve_order(reasons + ["partial-print"]),
                 "metrics": metrics,
             }
-        return {
+            logger.warning("CUPS job %s reported partial completion: %s", cups_job_id, _summarize_result(result))
+            return result
+        result = {
             "status": "DONE",
             "message": str(message or "job completed"),
             "reasons": reasons,
             "metrics": metrics,
         }
+        logger.info("CUPS job %s reached verified completion: %s", cups_job_id, _summarize_result(result))
+        return result
     if state in _STATE_FAILED:
-        return {
+        result = {
             "status": "FAILED",
             "message": str(message or "job failed"),
             "reasons": reasons or ["unknown"],
             "metrics": metrics,
         }
+        logger.warning("CUPS job %s reported failure state: %s", cups_job_id, _summarize_result(result))
+        return result
     if state in _STATE_PENDING or state in _STATE_PROCESSING:
         return {
             "status": "PRINTING",
@@ -345,13 +389,6 @@ def _poll_state_sync(cups_job_id: int) -> dict:
         "reasons": reasons,
         "metrics": metrics,
     }
-
-
-def _restart_job_sync(cups_job_id: int) -> None:
-    if not _CUPS_AVAILABLE:
-        return
-    conn = cups.Connection()
-    conn.restartJob(cups_job_id)
 
 
 def _get_all_printer_states_sync() -> dict[str, str]:
@@ -383,10 +420,10 @@ async def wait_for_cups_job(
 ) -> dict:
     """Poll until the CUPS job reaches a terminal state."""
     started = time.monotonic()
-    restarted_once = False
+    last_snapshot: tuple | None = None
     while True:
         if time.monotonic() - started > timeout_seconds:
-            return {
+            result = {
                 "status": "FAILED",
                 "message": f"CUPS job {cups_job_id} timed out after {timeout_seconds}s",
                 "reasons": ["timeout"],
@@ -396,19 +433,33 @@ async def wait_for_cups_job(
                     "sheetsExpected": None,
                     "sheetsPrinted": None,
                     "allPagesPrinted": False,
+                    "completionVerified": False,
                 },
             }
+            logger.warning("CUPS job %s timed out: %s", cups_job_id, _summarize_result(result))
+            return result
 
         result = await asyncio.to_thread(_poll_state_sync, cups_job_id)
+        snapshot = (
+            result.get("status"),
+            tuple(result.get("reasons") or []),
+            result.get("message"),
+            (result.get("metrics") or {}).get("pagesExpected"),
+            (result.get("metrics") or {}).get("pagesPrinted"),
+            (result.get("metrics") or {}).get("sheetsExpected"),
+            (result.get("metrics") or {}).get("sheetsPrinted"),
+            (result.get("metrics") or {}).get("allPagesPrinted"),
+            (result.get("metrics") or {}).get("completionVerified"),
+        )
+        if snapshot != last_snapshot:
+            logger.info("CUPS job %s poll update: %s", cups_job_id, _summarize_result(result))
+            last_snapshot = snapshot
 
-        if result["status"] == "BLOCKED" and not restarted_once:
-            await asyncio.to_thread(_restart_job_sync, cups_job_id)
-            restarted_once = True
-            await asyncio.sleep(2)
-            continue
         if result["status"] in {"DONE", "FAILED", "BLOCKED"}:
             if result["status"] == "BLOCKED":
                 result["status"] = "FAILED"
+                result["message"] = str(result.get("message") or "Printer stopped before the full document finished.")
+                logger.warning("CUPS job %s treated blocked state as retryable failure: %s", cups_job_id, _summarize_result(result))
             return result
         await asyncio.sleep(poll_interval)
 

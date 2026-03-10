@@ -214,6 +214,15 @@ async def _submit_and_monitor(
         await cloud_api.mark_printing_started(job_id, cups_job_id_str, printer_name)
         result = await cups_service.wait_for_cups_job(cups_job_id)
         metrics = result.get("metrics")
+        logger.info(
+            "Job %s CUPS terminal result cups_job_id=%s status=%s reasons=%s metrics=%s message=%s",
+            job_id,
+            cups_job_id_str,
+            result.get("status"),
+            result.get("reasons") or [],
+            metrics,
+            result.get("message"),
+        )
 
         if result.get("status") == "DONE":
             await update_job(job_id, "DONE")
@@ -225,6 +234,12 @@ async def _submit_and_monitor(
             try:
                 await set_terminal_event(job_id, "COMPLETED", payload)
                 await sync_terminal_event_payload(job_id, "COMPLETED", payload)
+                logger.info(
+                    "Job %s reported COMPLETED to PrintNest cups_job_id=%s metrics=%s",
+                    job_id,
+                    cups_job_id_str,
+                    metrics,
+                )
             except Exception as exc:
                 logger.warning("Could not enqueue/sync completed event for job %s: %s", job_id, exc)
             return
@@ -248,6 +263,15 @@ async def _submit_and_monitor(
             "failureMessage": failure_message,
             "isRetryable": is_retryable,
         }
+        logger.warning(
+            "Job %s classified as FAILED cups_job_id=%s failure_code=%s retryable=%s message=%s metrics=%s",
+            job_id,
+            cups_job_id_str,
+            failure_code,
+            is_retryable,
+            failure_message,
+            metrics,
+        )
         await set_terminal_event(job_id, "FAILED", payload)
         await sync_terminal_event_payload(job_id, "FAILED", payload)
     except Exception as exc:
@@ -269,6 +293,12 @@ async def _submit_and_monitor(
             "failureMessage": failure_message,
             "isRetryable": is_retryable,
         }
+        logger.exception(
+            "Job %s hit exception during print flow cups_job_id=%s retryable=%s",
+            job_id,
+            cups_job_id_str,
+            is_retryable,
+        )
         await set_terminal_event(job_id, "FAILED", payload)
         await sync_terminal_event_payload(job_id, "FAILED", payload)
     finally:
