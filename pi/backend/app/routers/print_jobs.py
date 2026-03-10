@@ -47,6 +47,8 @@ def _derive_failure_code(result: dict) -> str:
         return "INK_EMPTY"
     if _has_reason(reasons, "marker-supply-low", "marker-low", "toner-low", "ink-low"):
         return "INK_LOW"
+    if _has_reason(reasons, "completion-unverified"):
+        return "UNVERIFIED_COMPLETION"
     if not all_pages_printed:
         return "PARTIAL_PRINT"
     return "PRINT_FAILED"
@@ -118,6 +120,10 @@ async def confirm_print(job_id: str, background_tasks: BackgroundTasks):
             status_code=409,
             detail=f"Job is not ready for printing (status: {job['status']})",
         )
+
+    printer_issue = await cups_service.get_printer_blocking_issue(job["printer_name"])
+    if printer_issue:
+        raise HTTPException(status_code=409, detail=printer_issue)
 
     background_tasks.add_task(
         _submit_and_monitor,

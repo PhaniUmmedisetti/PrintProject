@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 
-import { buildJobFailureError, buildSimpleError, confirmPrint, getJobStatus } from "../api/piBackend";
+import {
+  PrinterNotReadyError,
+  buildJobFailureError,
+  buildSimpleError,
+  confirmPrint,
+  getJobStatus,
+} from "../api/piBackend";
 import type { KioskErrorState, StartPrintResponse } from "../api/piBackend";
 
 interface Props {
@@ -40,14 +46,24 @@ export default function PreviewScreen({ job, onConfirm, onError }: Props) {
     try {
       await confirmPrint(job.job_id);
       onConfirm();
-    } catch {
-      onError(
-        buildSimpleError("Could Not Start Printing", "Failed to start printing. Please try again.", {
-          retryLabel: "Try Again",
-          cancelLabel: "Home",
-          retryTarget: "KEYPAD",
-        }),
-      );
+    } catch (err) {
+      if (err instanceof PrinterNotReadyError) {
+        onError(
+          buildSimpleError("Printer Needs Attention", err.message, {
+            retryLabel: "Try Again",
+            cancelLabel: "Home",
+            retryTarget: "KEYPAD",
+          }),
+        );
+      } else {
+        onError(
+          buildSimpleError("Could Not Start Printing", "Failed to start printing. Please try again.", {
+            retryLabel: "Try Again",
+            cancelLabel: "Home",
+            retryTarget: "KEYPAD",
+          }),
+        );
+      }
     } finally {
       setConfirming(false);
     }

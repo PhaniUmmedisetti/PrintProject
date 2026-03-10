@@ -253,6 +253,62 @@ def _printer_has_completion_red_flag(detail: dict) -> bool:
     )
 
 
+def _printer_requires_attention(detail: dict) -> bool:
+    return _printer_has_completion_red_flag(detail) or detail.get("connection_state") == "OFFLINE"
+
+
+def _printer_red_flag_reasons(detail: dict) -> list[str]:
+    reasons: list[str] = []
+    if detail.get("paper_out") is True:
+        reasons.append("paper-out")
+    if detail.get("door_open") is True:
+        reasons.append("door-open")
+    if detail.get("cartridge_missing") is True:
+        reasons.append("cartridge-missing")
+    if detail.get("jammed") is True:
+        reasons.append("jam")
+    if str(detail.get("ink_state") or "UNKNOWN").upper() == "EMPTY":
+        reasons.append("ink-empty")
+    if detail.get("operational_state") == "ERROR":
+        reasons.append("printer-error")
+    if detail.get("connection_state") == "OFFLINE":
+        reasons.append("printer-offline")
+    return reasons
+
+
+def _printer_attention_message(detail: dict) -> str:
+    if detail.get("paper_out") is True:
+        return "Printer is out of paper."
+    if detail.get("door_open") is True:
+        return "Printer cover is open."
+    if detail.get("cartridge_missing") is True:
+        return "Printer cartridge is missing."
+    if detail.get("jammed") is True:
+        return "Printer has a paper jam."
+    if str(detail.get("ink_state") or "UNKNOWN").upper() == "EMPTY":
+        return "Printer is out of ink."
+    if detail.get("connection_state") == "OFFLINE":
+        return "Printer is offline."
+    if detail.get("operational_state") == "ERROR":
+        return str(detail.get("message") or "Printer needs attention.")
+    return "Printer is not ready."
+
+
+def _build_printer_attention_failure(
+    detail: dict,
+    metrics: dict,
+    reasons: list[str] | None = None,
+    message: str | None = None,
+) -> dict:
+    failure_reasons = _dedupe_preserve_order((reasons or []) + _printer_red_flag_reasons(detail))
+    return {
+        "status": "FAILED",
+        "message": message or _printer_attention_message(detail),
+        "reasons": failure_reasons or ["printer-error"],
+        "metrics": metrics,
+    }
+
+
 def _build_printer_detail_sync(conn: "cups.Connection", printers: dict, printer_name: str) -> dict:
     info = printers.get(printer_name)
     if info is None:
@@ -384,6 +440,23 @@ def _poll_state_sync(cups_job_id: int, printer_name: str | None = None) -> dict:
     metrics = _extract_job_metrics(attrs)
 
     if state in _STATE_BLOCKED:
+        if printer_name:
+            printer_detail = _printer_detail_sync(printer_name)
+            if _printer_has_completion_red_flag(printer_detail):
+                result = _build_printer_attention_failure(
+                    printer_detail,
+                    metrics,
+                    reasons=reasons,
+                    message=str(message or _printer_attention_message(printer_detail)),
+                )
+                logger.warning(
+                    "CUPS job %s entered blocked state with printer red flags printer=%s detail=%s result=%s",
+                    cups_job_id,
+                    printer_name,
+                    printer_detail,
+                    _summarize_result(result),
+                )
+                return result
         result = {
             "status": "BLOCKED",
             "message": str(message or "job held/stopped"),
@@ -422,11 +495,12 @@ def _poll_state_sync(cups_job_id: int, printer_name: str | None = None) -> dict:
                     )
                     return result
 
-                if _printer_has_completion_red_flag(printer_detail):
+                if _printer_requires_attention(printer_detail):
+                    red_flag_reasons = _printer_red_flag_reasons(printer_detail)
                     result = {
                         "status": "FAILED",
                         "message": "CUPS reported completion but printer state still showed a hardware problem.",
-                        "reasons": _dedupe_preserve_order(reasons + ["completion-unverified", "printer-red-flag"]),
+                        "reasons": _dedupe_preserve_order(reasons + red_flag_reasons + ["completion-unverified", "printer-red-flag"]),
                         "metrics": metrics,
                     }
                     logger.warning(
@@ -439,15 +513,14 @@ def _poll_state_sync(cups_job_id: int, printer_name: str | None = None) -> dict:
                     return result
 
             result = {
-                "status": "DONE",
-                "message": str(message or "job completed"),
-                "reasons": _dedupe_preserve_order(reasons + ["completion-inferred-without-counters"]),
+                "status": "FAILED",
+                "message": "CUPS reported completion but full-page completion could not be verified.",
+                "reasons": _dedupe_preserve_order(reasons + ["completion-unverified"]),
                 "metrics": metrics,
             }
-            logger.info(
-                "CUPS job %s accepted via done-state fallback printer=%s result=%s",
+            logger.warning(
+                "CUPS job %s reported done without verifiable completion: %s",
                 cups_job_id,
-                printer_name,
                 _summarize_result(result),
             )
             return result
@@ -478,6 +551,22 @@ def _poll_state_sync(cups_job_id: int, printer_name: str | None = None) -> dict:
         logger.warning("CUPS job %s reported failure state: %s", cups_job_id, _summarize_result(result))
         return result
     if state in _STATE_PENDING or state in _STATE_PROCESSING:
+        if printer_name:
+            printer_detail = _printer_detail_sync(printer_name)
+            if _printer_requires_attention(printer_detail):
+                result = _build_printer_attention_failure(
+                    printer_detail,
+                    metrics,
+                    reasons=reasons,
+                )
+                logger.warning(
+                    "CUPS job %s remained non-terminal with printer red flags printer=%s detail=%s result=%s",
+                    cups_job_id,
+                    printer_name,
+                    printer_detail,
+                    _summarize_result(result),
+                )
+                return result
         return {
             "status": "PRINTING",
             "message": str(message or "job in progress"),
@@ -486,6 +575,22 @@ def _poll_state_sync(cups_job_id: int, printer_name: str | None = None) -> dict:
         }
     if state == 0:
         # Unknown state; keep polling for a short while before timeout.
+        if printer_name:
+            printer_detail = _printer_detail_sync(printer_name)
+            if _printer_requires_attention(printer_detail):
+                result = _build_printer_attention_failure(
+                    printer_detail,
+                    metrics,
+                    reasons=reasons,
+                )
+                logger.warning(
+                    "CUPS job %s entered unknown state with printer red flags printer=%s detail=%s result=%s",
+                    cups_job_id,
+                    printer_name,
+                    printer_detail,
+                    _summarize_result(result),
+                )
+                return result
         return {
             "status": "PRINTING",
             "message": str(message or "job state unknown"),
@@ -582,3 +687,14 @@ async def get_printer_states() -> dict[str, str]:
 async def get_printer_details() -> dict[str, dict]:
     """Return detailed printer health for each configured printer."""
     return await asyncio.to_thread(_get_all_printer_details_sync)
+
+
+async def get_printer_detail(printer_name: str) -> dict:
+    return await asyncio.to_thread(_printer_detail_sync, printer_name)
+
+
+async def get_printer_blocking_issue(printer_name: str) -> str | None:
+    detail = await get_printer_detail(printer_name)
+    if _printer_requires_attention(detail):
+        return _printer_attention_message(detail)
+    return None

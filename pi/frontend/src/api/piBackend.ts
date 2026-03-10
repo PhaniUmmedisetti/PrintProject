@@ -56,6 +56,10 @@ export async function startPrint(code: string): Promise<StartPrintResponse> {
 
 export async function confirmPrint(jobId: string): Promise<void> {
   const res = await fetch(`${BASE}/local/confirm/${jobId}`, { method: "POST" });
+  if (res.status === 409) {
+    const payload = await res.json();
+    throw new PrinterNotReadyError(String(payload.detail ?? "Printer not ready"));
+  }
   if (!res.ok) throw new Error(`Confirm failed: ${res.status}`);
 }
 
@@ -93,15 +97,27 @@ export function buildJobFailureError(status: Pick<JobStatus, "error_msg" | "fail
         ? "The printer jammed before your full document finished."
         : status.failure_code === "PAPER_OUT"
           ? "The printer ran out of paper before your full document finished."
-          : status.failure_code === "DOOR_OPEN"
+        : status.failure_code === "DOOR_OPEN"
             ? "The printer was opened before your full document finished."
-            : status.failure_code === "CARTRIDGE_MISSING"
+          : status.failure_code === "CARTRIDGE_MISSING"
               ? "The printer cartridge needs attention before your full document can finish."
-              : status.failure_code === "INK_EMPTY"
+            : status.failure_code === "INK_EMPTY"
                 ? "The printer ran out of ink before your full document finished."
+              : status.failure_code === "UNVERIFIED_COMPLETION"
+                ? "The kiosk could not verify whether every page finished printing."
                 : status.failure_code === "DOWNLOAD_FAILED"
                   ? "The file could not be prepared for printing."
                   : "Printing stopped before your full document finished.";
+
+    if (status.failure_code === "UNVERIFIED_COMPLETION") {
+      return {
+        title: "Print Not Confirmed",
+        message: `${issue} If your full document already came out, tap Printed OK and do not retry. If nothing printed or pages are missing, use the same OTP again.`,
+        retryLabel: "Use Same OTP",
+        cancelLabel: "Printed OK",
+        retryTarget: "KEYPAD",
+      };
+    }
 
     return {
       title: "Print Interrupted",
