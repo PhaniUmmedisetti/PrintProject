@@ -193,6 +193,66 @@ def _summarize_result(result: dict) -> dict:
     }
 
 
+def _has_terminal_failure_signal(reasons: list[str], message: str | None) -> bool:
+    text = f"{' '.join(reasons)} {message or ''}".lower()
+    failure_needles = (
+        "abort",
+        "cancel",
+        "stopped",
+        "stop",
+        "hold",
+        "jam",
+        "media-empty",
+        "paper-out",
+        "paper-empty",
+        "media-needed",
+        "door-open",
+        "cover-open",
+        "cartridge-missing",
+        "marker-missing",
+        "marker-empty",
+        "toner-empty",
+        "ink-empty",
+        "offline",
+        "filter-failed",
+        "backend-failed",
+        "unable",
+        "error",
+    )
+    return any(needle in text for needle in failure_needles)
+
+
+def _printer_detail_sync(printer_name: str) -> dict:
+    if not _CUPS_AVAILABLE:
+        return _build_offline_detail(printer_name)
+    conn = cups.Connection()
+    printers = conn.getPrinters()
+    return _build_printer_detail_sync(conn, printers, printer_name)
+
+
+def _printer_looks_healthy_for_completion(detail: dict) -> bool:
+    return (
+        detail.get("connection_state") == "ONLINE"
+        and detail.get("operational_state") in {"IDLE", "PRINTING"}
+        and detail.get("paper_out") is not True
+        and detail.get("door_open") is not True
+        and detail.get("cartridge_missing") is not True
+        and detail.get("jammed") is not True
+        and str(detail.get("ink_state") or "UNKNOWN").upper() != "EMPTY"
+    )
+
+
+def _printer_has_completion_red_flag(detail: dict) -> bool:
+    return (
+        detail.get("paper_out") is True
+        or detail.get("door_open") is True
+        or detail.get("cartridge_missing") is True
+        or detail.get("jammed") is True
+        or str(detail.get("ink_state") or "UNKNOWN").upper() == "EMPTY"
+        or detail.get("operational_state") == "ERROR"
+    )
+
+
 def _build_printer_detail_sync(conn: "cups.Connection", printers: dict, printer_name: str) -> dict:
     info = printers.get(printer_name)
     if info is None:
@@ -295,7 +355,7 @@ def _submit_sync(file_path: str, printer_name: str, options: dict) -> int:
     )
 
 
-def _poll_state_sync(cups_job_id: int) -> dict:
+def _poll_state_sync(cups_job_id: int, printer_name: str | None = None) -> dict:
     if not _CUPS_AVAILABLE:
         raise RuntimeError("CUPS Python bindings are unavailable.")
     conn = cups.Connection()
@@ -334,13 +394,62 @@ def _poll_state_sync(cups_job_id: int) -> dict:
         return result
     if state in _STATE_DONE:
         if not metrics["completionVerified"]:
+            if _has_terminal_failure_signal(reasons, message):
+                result = {
+                    "status": "FAILED",
+                    "message": "CUPS reported completion with failure indicators.",
+                    "reasons": _dedupe_preserve_order(reasons + ["completion-unverified"]),
+                    "metrics": metrics,
+                }
+                logger.warning("CUPS job %s reported done with explicit failure signals: %s", cups_job_id, _summarize_result(result))
+                return result
+
+            if printer_name:
+                printer_detail = _printer_detail_sync(printer_name)
+                if _printer_looks_healthy_for_completion(printer_detail):
+                    result = {
+                        "status": "DONE",
+                        "message": str(message or "job completed"),
+                        "reasons": _dedupe_preserve_order(reasons + ["completion-inferred-from-printer-state"]),
+                        "metrics": metrics,
+                    }
+                    logger.info(
+                        "CUPS job %s accepted via healthy printer-state fallback printer=%s detail=%s result=%s",
+                        cups_job_id,
+                        printer_name,
+                        printer_detail,
+                        _summarize_result(result),
+                    )
+                    return result
+
+                if _printer_has_completion_red_flag(printer_detail):
+                    result = {
+                        "status": "FAILED",
+                        "message": "CUPS reported completion but printer state still showed a hardware problem.",
+                        "reasons": _dedupe_preserve_order(reasons + ["completion-unverified", "printer-red-flag"]),
+                        "metrics": metrics,
+                    }
+                    logger.warning(
+                        "CUPS job %s reported done without counters and printer red flags printer=%s detail=%s result=%s",
+                        cups_job_id,
+                        printer_name,
+                        printer_detail,
+                        _summarize_result(result),
+                    )
+                    return result
+
             result = {
-                "status": "FAILED",
-                "message": "CUPS reported completion but full-page completion could not be verified.",
-                "reasons": _dedupe_preserve_order(reasons + ["completion-unverified"]),
+                "status": "DONE",
+                "message": str(message or "job completed"),
+                "reasons": _dedupe_preserve_order(reasons + ["completion-inferred-without-counters"]),
                 "metrics": metrics,
             }
-            logger.warning("CUPS job %s reported done without verifiable completion: %s", cups_job_id, _summarize_result(result))
+            logger.info(
+                "CUPS job %s accepted via done-state fallback printer=%s result=%s",
+                cups_job_id,
+                printer_name,
+                _summarize_result(result),
+            )
             return result
         if not metrics["allPagesPrinted"]:
             result = {
@@ -415,6 +524,7 @@ async def submit_to_cups(file_path: str, printer_name: str, options: dict) -> in
 
 async def wait_for_cups_job(
     cups_job_id: int,
+    printer_name: str | None = None,
     poll_interval: float = 2.0,
     timeout_seconds: int = 300,
 ) -> dict:
@@ -439,7 +549,7 @@ async def wait_for_cups_job(
             logger.warning("CUPS job %s timed out: %s", cups_job_id, _summarize_result(result))
             return result
 
-        result = await asyncio.to_thread(_poll_state_sync, cups_job_id)
+        result = await asyncio.to_thread(_poll_state_sync, cups_job_id, printer_name)
         snapshot = (
             result.get("status"),
             tuple(result.get("reasons") or []),

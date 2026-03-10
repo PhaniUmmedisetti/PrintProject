@@ -212,7 +212,7 @@ async def _submit_and_monitor(
         )
         await update_job(job_id, "PRINTING", cups_job_id=cups_job_id_str)
         await cloud_api.mark_printing_started(job_id, cups_job_id_str, printer_name)
-        result = await cups_service.wait_for_cups_job(cups_job_id)
+        result = await cups_service.wait_for_cups_job(cups_job_id, printer_name=printer_name)
         metrics = result.get("metrics")
         logger.info(
             "Job %s CUPS terminal result cups_job_id=%s status=%s reasons=%s metrics=%s message=%s",
