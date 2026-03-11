@@ -59,12 +59,22 @@ def _is_verified_completion(result: dict) -> bool:
     return bool(metrics.get("completionVerified")) and bool(metrics.get("allPagesPrinted"))
 
 
+def _has_any_printed_output(result: dict) -> bool:
+    metrics = result.get("metrics") or {}
+    pages_printed = metrics.get("pagesPrinted")
+    sheets_printed = metrics.get("sheetsPrinted")
+
+    return (isinstance(pages_printed, int) and pages_printed > 0) or (
+        isinstance(sheets_printed, int) and sheets_printed > 0
+    )
+
+
 def _is_accepted_completion(result: dict) -> bool:
     if _is_verified_completion(result):
         return True
 
     reasons = [str(reason) for reason in result.get("reasons") or []]
-    return "completion-inferred-from-printer-state" in reasons
+    return "completion-inferred-from-printer-state" in reasons and _has_any_printed_output(result)
 
 
 async def _record_retryable_failure(
