@@ -59,6 +59,14 @@ def _is_verified_completion(result: dict) -> bool:
     return bool(metrics.get("completionVerified")) and bool(metrics.get("allPagesPrinted"))
 
 
+def _is_accepted_completion(result: dict) -> bool:
+    if _is_verified_completion(result):
+        return True
+
+    reasons = [str(reason) for reason in result.get("reasons") or []]
+    return "completion-inferred-from-printer-state" in reasons
+
+
 async def _record_retryable_failure(
     job_id: str,
     *,
@@ -267,7 +275,7 @@ async def _submit_and_monitor(
             result.get("message"),
         )
 
-        if result.get("status") == "DONE" and _is_verified_completion(result):
+        if result.get("status") == "DONE" and _is_accepted_completion(result):
             await update_job(job_id, "DONE")
             payload = {
                 "jobId": job_id,
