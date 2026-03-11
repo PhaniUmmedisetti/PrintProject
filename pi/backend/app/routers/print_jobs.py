@@ -54,6 +54,37 @@ def _derive_failure_code(result: dict) -> str:
     return "PRINT_FAILED"
 
 
+def _is_verified_completion(result: dict) -> bool:
+    metrics = result.get("metrics") or {}
+    return bool(metrics.get("completionVerified")) and bool(metrics.get("allPagesPrinted"))
+
+
+async def _record_retryable_failure(
+    job_id: str,
+    *,
+    cups_job_id: str | None,
+    failure_code: str,
+    failure_message: str,
+) -> None:
+    await update_job(
+        job_id,
+        "FAILED",
+        error_msg=failure_message,
+        failure_code=failure_code,
+        retryable=True,
+    )
+
+    payload = {
+        "jobId": job_id,
+        "cupsJobId": cups_job_id,
+        "failureCode": failure_code,
+        "failureMessage": failure_message,
+        "isRetryable": True,
+    }
+    await set_terminal_event(job_id, "FAILED", payload)
+    await sync_terminal_event_payload(job_id, "FAILED", payload)
+
+
 def _assert_pdf_looks_valid(file_path: Path) -> None:
     """Cheap PDF sanity checks to avoid sending corrupt files to CUPS."""
     size = file_path.stat().st_size
@@ -101,6 +132,16 @@ async def start_print(request: PrintRequest, background_tasks: BackgroundTasks):
         job_summary=json.dumps(job["job_summary"]),
     )
 
+    blocking = await cups_service.get_printer_blocking_status(printer_name)
+    if blocking is not None:
+        await _record_retryable_failure(
+            job_id,
+            cups_job_id=None,
+            failure_code=str(blocking["failureCode"]),
+            failure_message=str(blocking["failureMessage"]),
+        )
+        raise HTTPException(status_code=409, detail=str(blocking["failureMessage"]))
+
     background_tasks.add_task(_download_and_convert, job)
 
     return {
@@ -121,9 +162,15 @@ async def confirm_print(job_id: str, background_tasks: BackgroundTasks):
             detail=f"Job is not ready for printing (status: {job['status']})",
         )
 
-    printer_issue = await cups_service.get_printer_blocking_issue(job["printer_name"])
-    if printer_issue:
-        raise HTTPException(status_code=409, detail=printer_issue)
+    blocking = await cups_service.get_printer_blocking_status(job["printer_name"])
+    if blocking is not None:
+        await _record_retryable_failure(
+            job_id,
+            cups_job_id=job.get("cups_job_id"),
+            failure_code=str(blocking["failureCode"]),
+            failure_message=str(blocking["failureMessage"]),
+        )
+        raise HTTPException(status_code=409, detail=str(blocking["failureMessage"]))
 
     background_tasks.add_task(
         _submit_and_monitor,
@@ -170,22 +217,12 @@ async def _download_and_convert(job: dict) -> None:
         await update_job(job_id, "READY", file_path=str(print_path))
     except Exception as exc:
         failure_message = str(exc)
-        await update_job(
+        await _record_retryable_failure(
             job_id,
-            "FAILED",
-            error_msg=failure_message,
+            cups_job_id=None,
             failure_code="DOWNLOAD_FAILED",
-            retryable=True,
+            failure_message=failure_message,
         )
-        payload = {
-            "jobId": job_id,
-            "cupsJobId": None,
-            "failureCode": "DOWNLOAD_FAILED",
-            "failureMessage": failure_message,
-            "isRetryable": True,
-        }
-        await set_terminal_event(job_id, "FAILED", payload)
-        await sync_terminal_event_payload(job_id, "FAILED", payload)
         if job_dir.exists() and not settings.keep_failed_job_files:
             shutil.rmtree(job_dir, ignore_errors=True)
         elif job_dir.exists():
@@ -230,7 +267,7 @@ async def _submit_and_monitor(
             result.get("message"),
         )
 
-        if result.get("status") == "DONE":
+        if result.get("status") == "DONE" and _is_verified_completion(result):
             await update_job(job_id, "DONE")
             payload = {
                 "jobId": job_id,
@@ -250,25 +287,33 @@ async def _submit_and_monitor(
                 logger.warning("Could not enqueue/sync completed event for job %s: %s", job_id, exc)
             return
 
+        if result.get("status") == "DONE":
+            result = {
+                **result,
+                "status": "FAILED",
+                "message": str(result.get("message") or "CUPS reported completion but explicit page completion could not be verified."),
+                "reasons": [*list(result.get("reasons") or []), "completion-unverified"],
+                "metrics": metrics,
+            }
+            logger.warning(
+                "Job %s refused DONE result without verified completion cups_job_id=%s reasons=%s metrics=%s",
+                job_id,
+                cups_job_id_str,
+                result.get("reasons") or [],
+                metrics,
+            )
+
         failure_code = _derive_failure_code(result)
         failure_message = str(result.get("message") or "CUPS did not complete the full document print.")
         # Only a confirmed COMPLETED event should consume the OTP. Any local
         # print failure keeps the same OTP reusable from the start.
         is_retryable = True
-        await update_job(
+        await _record_retryable_failure(
             job_id,
-            "FAILED",
-            error_msg=failure_message,
+            cups_job_id=cups_job_id_str,
             failure_code=failure_code,
-            retryable=is_retryable,
+            failure_message=failure_message,
         )
-        payload = {
-            "jobId": job_id,
-            "cupsJobId": cups_job_id_str,
-            "failureCode": failure_code,
-            "failureMessage": failure_message,
-            "isRetryable": is_retryable,
-        }
         logger.warning(
             "Job %s classified as FAILED cups_job_id=%s failure_code=%s retryable=%s message=%s metrics=%s",
             job_id,
@@ -278,35 +323,23 @@ async def _submit_and_monitor(
             failure_message,
             metrics,
         )
-        await set_terminal_event(job_id, "FAILED", payload)
-        await sync_terminal_event_payload(job_id, "FAILED", payload)
     except Exception as exc:
         failure_message = str(exc)
         # Treat every local failure as retryable so the user can re-enter the
         # same OTP unless we explicitly reached COMPLETED.
         is_retryable = True
-        await update_job(
+        await _record_retryable_failure(
             job_id,
-            "FAILED",
-            error_msg=failure_message,
+            cups_job_id=cups_job_id_str,
             failure_code="PRINT_FAILED",
-            retryable=is_retryable,
+            failure_message=failure_message,
         )
-        payload = {
-            "jobId": job_id,
-            "cupsJobId": cups_job_id_str,
-            "failureCode": "PRINT_FAILED",
-            "failureMessage": failure_message,
-            "isRetryable": is_retryable,
-        }
         logger.exception(
             "Job %s hit exception during print flow cups_job_id=%s retryable=%s",
             job_id,
             cups_job_id_str,
             is_retryable,
         )
-        await set_terminal_event(job_id, "FAILED", payload)
-        await sync_terminal_event_payload(job_id, "FAILED", payload)
     finally:
         should_cleanup = True
         if settings.keep_failed_job_files:

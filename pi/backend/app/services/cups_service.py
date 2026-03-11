@@ -294,6 +294,20 @@ def _printer_attention_message(detail: dict) -> str:
     return "Printer is not ready."
 
 
+def _printer_attention_failure_code(detail: dict) -> str:
+    if detail.get("paper_out") is True:
+        return "PAPER_OUT"
+    if detail.get("door_open") is True:
+        return "DOOR_OPEN"
+    if detail.get("cartridge_missing") is True:
+        return "CARTRIDGE_MISSING"
+    if detail.get("jammed") is True:
+        return "PAPER_JAM"
+    if str(detail.get("ink_state") or "UNKNOWN").upper() == "EMPTY":
+        return "INK_EMPTY"
+    return "PRINT_FAILED"
+
+
 def _build_printer_attention_failure(
     detail: dict,
     metrics: dict,
@@ -693,8 +707,18 @@ async def get_printer_detail(printer_name: str) -> dict:
     return await asyncio.to_thread(_printer_detail_sync, printer_name)
 
 
-async def get_printer_blocking_issue(printer_name: str) -> str | None:
+async def get_printer_blocking_status(printer_name: str) -> dict | None:
     detail = await get_printer_detail(printer_name)
-    if _printer_requires_attention(detail):
-        return _printer_attention_message(detail)
-    return None
+    if not _printer_requires_attention(detail):
+        return None
+
+    return {
+        "failureCode": _printer_attention_failure_code(detail),
+        "failureMessage": _printer_attention_message(detail),
+        "detail": detail,
+    }
+
+
+async def get_printer_blocking_issue(printer_name: str) -> str | None:
+    blocking = await get_printer_blocking_status(printer_name)
+    return None if blocking is None else str(blocking["failureMessage"])
