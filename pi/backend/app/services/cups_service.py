@@ -323,6 +323,19 @@ def _build_printer_attention_failure(
     }
 
 
+def _build_unverified_completion_failure(
+    metrics: dict,
+    reasons: list[str] | None = None,
+    message: str | None = None,
+) -> dict:
+    return {
+        "status": "FAILED",
+        "message": message or "CUPS reported completion but full-page completion could not be verified.",
+        "reasons": _dedupe_preserve_order(list(reasons or []) + ["completion-unverified"]),
+        "metrics": metrics,
+    }
+
+
 def _build_printer_detail_sync(conn: "cups.Connection", printers: dict, printer_name: str) -> dict:
     info = printers.get(printer_name)
     if info is None:
@@ -641,6 +654,68 @@ async def submit_to_cups(file_path: str, printer_name: str, options: dict) -> in
     return await asyncio.to_thread(_submit_sync, file_path, printer_name, options)
 
 
+async def _confirm_inferred_completion(
+    cups_job_id: int,
+    printer_name: str,
+    result: dict,
+    *,
+    settle_seconds: float = 12.0,
+    poll_interval: float = 2.0,
+) -> dict:
+    """Wait briefly after inferred completion so delayed paper-out/jam signals win."""
+    metrics = result.get("metrics") or {}
+    reasons = list(result.get("reasons") or [])
+    deadline = time.monotonic() + settle_seconds
+    saw_healthy_detail = False
+
+    while time.monotonic() < deadline:
+        printer_detail = await get_printer_detail(printer_name)
+
+        if _printer_requires_attention(printer_detail):
+            failure = _build_printer_attention_failure(
+                printer_detail,
+                metrics,
+                reasons=reasons + ["completion-unverified", "completion-settle-failed"],
+                message="Printer reported a hardware problem before output was confirmed.",
+            )
+            logger.warning(
+                "CUPS job %s inferred completion was rejected during settle window printer=%s detail=%s result=%s",
+                cups_job_id,
+                printer_name,
+                printer_detail,
+                _summarize_result(failure),
+            )
+            return failure
+
+        if _printer_looks_healthy_for_completion(printer_detail):
+            saw_healthy_detail = True
+
+        await asyncio.sleep(poll_interval)
+
+    if not saw_healthy_detail:
+        failure = _build_unverified_completion_failure(
+            metrics,
+            reasons=reasons + ["completion-settle-timeout"],
+        )
+        logger.warning(
+            "CUPS job %s inferred completion timed out without stable healthy printer state: %s",
+            cups_job_id,
+            _summarize_result(failure),
+        )
+        return failure
+
+    confirmed = {
+        **result,
+        "reasons": _dedupe_preserve_order(reasons + ["completion-confirmed-after-settle-window"]),
+    }
+    logger.info(
+        "CUPS job %s inferred completion confirmed after settle window: %s",
+        cups_job_id,
+        _summarize_result(confirmed),
+    )
+    return confirmed
+
+
 async def wait_for_cups_job(
     cups_job_id: int,
     printer_name: str | None = None,
@@ -689,6 +764,8 @@ async def wait_for_cups_job(
                 result["status"] = "FAILED"
                 result["message"] = str(result.get("message") or "Printer stopped before the full document finished.")
                 logger.warning("CUPS job %s treated blocked state as retryable failure: %s", cups_job_id, _summarize_result(result))
+            elif result["status"] == "DONE" and printer_name and not (result.get("metrics") or {}).get("completionVerified"):
+                result = await _confirm_inferred_completion(cups_job_id, printer_name, result)
             return result
         await asyncio.sleep(poll_interval)
 
