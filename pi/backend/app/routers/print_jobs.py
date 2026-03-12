@@ -72,12 +72,12 @@ def _is_verified_completion(result: dict) -> bool:
 
 def _has_any_printed_output(result: dict) -> bool:
     metrics = result.get("metrics") or {}
-    pages_printed = metrics.get("pagesPrinted")
     sheets_printed = metrics.get("sheetsPrinted")
 
-    return (isinstance(pages_printed, int) and pages_printed > 0) or (
-        isinstance(sheets_printed, int) and sheets_printed > 0
-    )
+    # For inferred completion, trust the media-sheet counter rather than the
+    # page counter. A page can be "completed" in CUPS even when no sheet
+    # actually exited the printer.
+    return isinstance(sheets_printed, int) and sheets_printed > 0
 
 
 def _is_accepted_completion(result: dict) -> bool:
