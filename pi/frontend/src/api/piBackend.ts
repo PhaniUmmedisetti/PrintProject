@@ -36,6 +36,12 @@ export interface KioskErrorState {
   retryTarget?: "KEYPAD" | "LANDING";
 }
 
+interface RetryableErrorPayload {
+  message?: string;
+  failureCode?: string;
+  retryable?: boolean;
+}
+
 export async function startPrint(code: string): Promise<StartPrintResponse> {
   const res = await fetch(`${BASE}/local/print`, {
     method: "POST",
@@ -47,7 +53,7 @@ export async function startPrint(code: string): Promise<StartPrintResponse> {
 
   if (res.status === 409) {
     const payload = await res.json();
-    throw new PrinterNotReadyError(String(payload.detail ?? "Printer not ready"));
+    throw buildPrinterAttentionException(payload.detail);
   }
 
   if (!res.ok) throw new Error(`Server error: ${res.status}`);
@@ -58,7 +64,7 @@ export async function confirmPrint(jobId: string): Promise<void> {
   const res = await fetch(`${BASE}/local/confirm/${jobId}`, { method: "POST" });
   if (res.status === 409) {
     const payload = await res.json();
-    throw new PrinterNotReadyError(String(payload.detail ?? "Printer not ready"));
+    throw buildPrinterAttentionException(payload.detail);
   }
   if (!res.ok) throw new Error(`Confirm failed: ${res.status}`);
 }
@@ -83,35 +89,97 @@ export class InvalidCodeError extends Error {
 }
 
 export class PrinterNotReadyError extends Error {
-  constructor(message: string) {
+  failureCode: string;
+  retryable: boolean;
+
+  constructor(message: string, failureCode = "PRINTER_NOT_READY", retryable = true) {
     super(message);
+    this.failureCode = failureCode;
+    this.retryable = retryable;
+  }
+}
+
+function buildPrinterAttentionException(detail: unknown): PrinterNotReadyError {
+  if (detail && typeof detail === "object") {
+    const typed = detail as RetryableErrorPayload;
+    return new PrinterNotReadyError(
+      String(typed.message ?? "Printer not ready"),
+      String(typed.failureCode ?? "PRINTER_NOT_READY"),
+      typed.retryable !== false,
+    );
+  }
+
+  return new PrinterNotReadyError(String(detail ?? "Printer not ready"));
+}
+
+function describeFailureCode(failureCode: string | null | undefined): { title: string; issue: string } {
+  switch (failureCode) {
+    case "PAPER_OUT":
+      return {
+        title: "Load Paper",
+        issue: "The printer is out of paper, so nothing else can print until paper is loaded.",
+      };
+    case "PAPER_JAM":
+      return {
+        title: "Paper Jam",
+        issue: "The printer jammed before your full document finished printing.",
+      };
+    case "DOOR_OPEN":
+      return {
+        title: "Close Printer Cover",
+        issue: "The printer cover is open, so the job cannot finish.",
+      };
+    case "CARTRIDGE_MISSING":
+      return {
+        title: "Printer Cartridge Issue",
+        issue: "The printer cartridge needs attention before your document can finish.",
+      };
+    case "INK_EMPTY":
+      return {
+        title: "Printer Out Of Ink",
+        issue: "The printer ran out of ink before your full document finished.",
+      };
+    case "INK_LOW":
+      return {
+        title: "Printer Needs Attention",
+        issue: "The printer reports low ink and could not complete this document reliably.",
+      };
+    case "DOWNLOAD_FAILED":
+      return {
+        title: "File Could Not Be Prepared",
+        issue: "The kiosk could not prepare your file for printing.",
+      };
+    case "UNVERIFIED_COMPLETION":
+      return {
+        title: "Print Not Confirmed",
+        issue: "The kiosk could not verify whether every page finished printing.",
+      };
+    case "PARTIAL_PRINT":
+      return {
+        title: "Print Interrupted",
+        issue: "The printer did not finish the full document.",
+      };
+    case "PRINTER_NOT_READY":
+      return {
+        title: "Printer Needs Attention",
+        issue: "The printer is not ready to accept this job yet.",
+      };
+    default:
+      return {
+        title: "Printing Failed",
+        issue: "Printing stopped before your full document finished.",
+      };
   }
 }
 
 export function buildJobFailureError(status: Pick<JobStatus, "error_msg" | "failure_code" | "retryable">): KioskErrorState {
   const baseMessage = String(status.error_msg ?? "Printing failed.");
+  const { title, issue } = describeFailureCode(status.failure_code);
 
   if (status.retryable) {
-    const issue =
-      status.failure_code === "PAPER_JAM"
-        ? "The printer jammed before your full document finished."
-        : status.failure_code === "PAPER_OUT"
-          ? "The printer ran out of paper before your full document finished."
-        : status.failure_code === "DOOR_OPEN"
-            ? "The printer was opened before your full document finished."
-          : status.failure_code === "CARTRIDGE_MISSING"
-              ? "The printer cartridge needs attention before your full document can finish."
-            : status.failure_code === "INK_EMPTY"
-                ? "The printer ran out of ink before your full document finished."
-              : status.failure_code === "UNVERIFIED_COMPLETION"
-                ? "The kiosk could not verify whether every page finished printing."
-                : status.failure_code === "DOWNLOAD_FAILED"
-                  ? "The file could not be prepared for printing."
-                  : "Printing stopped before your full document finished.";
-
     if (status.failure_code === "UNVERIFIED_COMPLETION") {
       return {
-        title: "Print Not Confirmed",
+        title,
         message: `${issue} If your full document already came out, tap Printed OK and do not retry. If nothing printed or pages are missing, use the same OTP again.`,
         retryLabel: "Use Same OTP",
         cancelLabel: "Printed OK",
@@ -120,7 +188,7 @@ export function buildJobFailureError(status: Pick<JobStatus, "error_msg" | "fail
     }
 
     return {
-      title: "Print Interrupted",
+      title,
       message: `${issue} Your same OTP is still valid. Use it again to print from the start.`,
       retryLabel: "Use Same OTP",
       cancelLabel: "Home",
@@ -129,8 +197,30 @@ export function buildJobFailureError(status: Pick<JobStatus, "error_msg" | "fail
   }
 
   return {
-    title: "Printing Failed",
+    title,
     message: baseMessage,
+    retryLabel: "Try Again",
+    cancelLabel: "Home",
+    retryTarget: "KEYPAD",
+  };
+}
+
+export function buildPrinterAttentionError(error: PrinterNotReadyError): KioskErrorState {
+  const { title, issue } = describeFailureCode(error.failureCode);
+
+  if (error.retryable) {
+    return {
+      title,
+      message: `${issue} Your same OTP is still valid. Fix the printer issue, then use the same OTP again.`,
+      retryLabel: "Use Same OTP",
+      cancelLabel: "Home",
+      retryTarget: "KEYPAD",
+    };
+  }
+
+  return {
+    title,
+    message: error.message,
     retryLabel: "Try Again",
     cancelLabel: "Home",
     retryTarget: "KEYPAD",

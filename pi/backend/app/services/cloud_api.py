@@ -22,6 +22,10 @@ class InvalidOtpError(Exception):
 class PrinterNotReadyError(Exception):
     """Raised when the backend blocks release due to printer health."""
 
+    def __init__(self, message: str, failure_code: str = "PRINTER_NOT_READY"):
+        super().__init__(message)
+        self.failure_code = failure_code
+
 
 def _body_hash(body: bytes) -> str:
     if not body:
@@ -82,12 +86,13 @@ async def release_job(otp: str) -> dict:
         raise InvalidOtpError()
 
     if response.status_code == 409:
-        error_code = response.json().get("error", {}).get("code")
+        error = response.json().get("error", {})
+        error_code = error.get("code")
         if error_code == "LOCK_CONFLICT":
             raise InvalidOtpError()
         if error_code == "PRINTER_NOT_READY":
-            message = response.json().get("error", {}).get("message", "Printer not ready.")
-            raise PrinterNotReadyError(message)
+            message = error.get("message", "Printer not ready.")
+            raise PrinterNotReadyError(message, failure_code="PRINTER_NOT_READY")
 
     response.raise_for_status()
     payload = response.json()

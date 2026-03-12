@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 
 import {
   PrinterNotReadyError,
+  buildPrinterAttentionError,
   buildJobFailureError,
   buildSimpleError,
   confirmPrint,
@@ -48,13 +49,7 @@ export default function PreviewScreen({ job, onConfirm, onError }: Props) {
       onConfirm();
     } catch (err) {
       if (err instanceof PrinterNotReadyError) {
-        onError(
-          buildSimpleError("Printer Needs Attention", err.message, {
-            retryLabel: "Try Again",
-            cancelLabel: "Home",
-            retryTarget: "KEYPAD",
-          }),
-        );
+        onError(buildPrinterAttentionError(err));
       } else {
         onError(
           buildSimpleError("Could Not Start Printing", "Failed to start printing. Please try again.", {

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 
 import CodeKeypad from "../components/CodeKeypad";
-import { InvalidCodeError, PrinterNotReadyError, buildSimpleError, startPrint } from "../api/piBackend";
+import { InvalidCodeError, PrinterNotReadyError, buildPrinterAttentionError, buildSimpleError, startPrint } from "../api/piBackend";
 import type { KioskErrorState, StartPrintResponse } from "../api/piBackend";
 
 const CODE_LENGTH = 6;
@@ -33,13 +33,7 @@ export default function KeypadScreen({ onBack, onCodeAccepted, onError }: Props)
         setTimeout(() => setShaking(false), 500);
         setCode("");
       } else if (err instanceof PrinterNotReadyError) {
-        onError(
-          buildSimpleError("Printer Needs Attention", err.message, {
-            retryLabel: "Try Again",
-            cancelLabel: "Home",
-            retryTarget: "KEYPAD",
-          }),
-        );
+        onError(buildPrinterAttentionError(err));
       } else {
         onError(
           buildSimpleError("Connection Problem", "Could not reach the print server. Please try again.", {

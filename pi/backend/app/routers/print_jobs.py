@@ -21,6 +21,17 @@ class PrintRequest(BaseModel):
     code: str
 
 
+def _build_retryable_error_detail(
+    failure_code: str,
+    failure_message: str,
+) -> dict:
+    return {
+        "message": failure_message,
+        "failureCode": failure_code,
+        "retryable": True,
+    }
+
+
 def _has_reason(reasons: list[str], *needles: str) -> bool:
     lowered_needles = tuple(needle.lower() for needle in needles)
     for reason in reasons:
@@ -138,7 +149,10 @@ async def start_print(request: PrintRequest, background_tasks: BackgroundTasks):
     except cloud_api.InvalidOtpError:
         raise HTTPException(status_code=404, detail="Invalid or expired code")
     except cloud_api.PrinterNotReadyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(
+            status_code=409,
+            detail=_build_retryable_error_detail(exc.failure_code, str(exc)),
+        )
 
     job_id = job["job_id"]
     printer_name = _resolve_printer_name(job["job_summary"])
@@ -158,7 +172,13 @@ async def start_print(request: PrintRequest, background_tasks: BackgroundTasks):
             failure_code=str(blocking["failureCode"]),
             failure_message=str(blocking["failureMessage"]),
         )
-        raise HTTPException(status_code=409, detail=str(blocking["failureMessage"]))
+        raise HTTPException(
+            status_code=409,
+            detail=_build_retryable_error_detail(
+                str(blocking["failureCode"]),
+                str(blocking["failureMessage"]),
+            ),
+        )
 
     background_tasks.add_task(_download_and_convert, job)
 
@@ -188,7 +208,13 @@ async def confirm_print(job_id: str, background_tasks: BackgroundTasks):
             failure_code=str(blocking["failureCode"]),
             failure_message=str(blocking["failureMessage"]),
         )
-        raise HTTPException(status_code=409, detail=str(blocking["failureMessage"]))
+        raise HTTPException(
+            status_code=409,
+            detail=_build_retryable_error_detail(
+                str(blocking["failureCode"]),
+                str(blocking["failureMessage"]),
+            ),
+        )
 
     background_tasks.add_task(
         _submit_and_monitor,
