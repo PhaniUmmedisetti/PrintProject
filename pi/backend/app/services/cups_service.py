@@ -156,17 +156,23 @@ def _extract_job_metrics(attrs: dict) -> dict:
     sheets_expected = _as_int(attrs.get("job-media-sheets"))
     sheets_printed = _as_int(attrs.get("job-media-sheets-completed"))
 
-    if pages_expected is not None and pages_printed is not None and pages_expected > 0:
-        all_pages_printed = pages_printed >= pages_expected
-        completion_verified = True
-    elif sheets_expected is not None and sheets_printed is not None and sheets_expected > 0:
+    # Prefer sheet counters over page counters. The kiosk contract cares about
+    # physical paper output, and some drivers report page completion before a
+    # sheet actually exits the printer.
+    if sheets_expected is not None and sheets_printed is not None and sheets_expected > 0:
         all_pages_printed = sheets_printed >= sheets_expected
         completion_verified = True
+        completion_source = "sheets"
+    elif pages_expected is not None and pages_printed is not None and pages_expected > 0:
+        all_pages_printed = pages_printed >= pages_expected
+        completion_verified = True
+        completion_source = "pages"
     else:
         # Strict rule: only treat the job as fully printed when CUPS gives us
         # explicit completion counters we can compare.
         all_pages_printed = False
         completion_verified = False
+        completion_source = None
 
     return {
         "pagesExpected": pages_expected,
@@ -175,6 +181,7 @@ def _extract_job_metrics(attrs: dict) -> dict:
         "sheetsPrinted": sheets_printed,
         "allPagesPrinted": all_pages_printed,
         "completionVerified": completion_verified,
+        "completionSource": completion_source,
     }
 
 
@@ -190,6 +197,7 @@ def _summarize_result(result: dict) -> dict:
         "sheetsPrinted": metrics.get("sheetsPrinted"),
         "allPagesPrinted": metrics.get("allPagesPrinted"),
         "completionVerified": metrics.get("completionVerified"),
+        "completionSource": metrics.get("completionSource"),
     }
 
 
@@ -764,8 +772,11 @@ async def wait_for_cups_job(
                 result["status"] = "FAILED"
                 result["message"] = str(result.get("message") or "Printer stopped before the full document finished.")
                 logger.warning("CUPS job %s treated blocked state as retryable failure: %s", cups_job_id, _summarize_result(result))
-            elif result["status"] == "DONE" and printer_name and not (result.get("metrics") or {}).get("completionVerified"):
-                result = await _confirm_inferred_completion(cups_job_id, printer_name, result)
+            elif result["status"] == "DONE" and printer_name:
+                metrics = result.get("metrics") or {}
+                completion_source = metrics.get("completionSource")
+                if completion_source != "sheets":
+                    result = await _confirm_inferred_completion(cups_job_id, printer_name, result)
             return result
         await asyncio.sleep(poll_interval)
 
