@@ -62,7 +62,12 @@ def _derive_failure_code(result: dict) -> str:
 
 def _is_accepted_completion(result: dict) -> bool:
     metrics = result.get("metrics") or {}
-    return bool(metrics.get("completionVerified")) and bool(metrics.get("allPagesPrinted"))
+    if bool(metrics.get("completionVerified")) and bool(metrics.get("allPagesPrinted")):
+        return True
+    # The settle window is the fallback verifier for printers that don't report
+    # page counters (e.g. DeskJet 2300). If it passed cleanly, trust it.
+    reasons = result.get("reasons") or []
+    return "completion-confirmed-after-settle-window" in reasons
 
 
 async def _record_retryable_failure(
