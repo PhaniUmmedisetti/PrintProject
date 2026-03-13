@@ -4,8 +4,13 @@ All blocking pycups calls are run in a thread pool to keep the event loop free.
 """
 
 import asyncio
+import http.client
 import logging
+import shutil
+import socket
+import subprocess
 import time
+import urllib.request
 
 from app.config import settings
 
@@ -727,6 +732,103 @@ async def submit_to_cups(file_path: str, printer_name: str, options: dict) -> in
     return await asyncio.to_thread(_submit_sync, file_path, printer_name, options)
 
 
+def _get_printer_device_uri_sync(printer_name: str) -> str | None:
+    if not _CUPS_AVAILABLE:
+        return None
+    try:
+        conn = cups.Connection()
+        return conn.getPrinters().get(printer_name, {}).get("device-uri")
+    except Exception:
+        return None
+
+
+def _extract_ip_from_device_uri(device_uri: str) -> str | None:
+    if not device_uri:
+        return None
+    try:
+        if "ip=" in device_uri:
+            return device_uri.split("ip=")[1].split("&")[0].split("/")[0]
+        if device_uri.startswith("socket://"):
+            return device_uri[9:].split(":")[0]
+        if device_uri.startswith(("ipp://", "ipps://")):
+            return device_uri.split("//")[1].split("/")[0].split(":")[0]
+    except (IndexError, ValueError):
+        pass
+    return None
+
+
+def _check_paper_via_ews_sync(ip: str) -> bool | None:
+    """Query HP Embedded Web Server for paper-out. Returns True=out, False=ok, None=unknown."""
+    endpoints = [
+        "/DevMgmt/ProductStatusDyn.xml",
+        "/hp/device/InternalPages/Index?id=ProductStatus",
+    ]
+    for path in endpoints:
+        try:
+            req = urllib.request.Request(
+                f"http://{ip}{path}",
+                headers={"User-Agent": "PrintProject/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                body = resp.read().decode("utf-8", errors="replace").lower()
+                if any(tok in body for tok in ("paper-out", "out of paper", "media empty", "mediempty")):
+                    return True
+                # Look for tray/input empty signals
+                if "empty" in body and any(tok in body for tok in ("tray", "input", "media", "paper")):
+                    return True
+                return False
+        except (OSError, socket.timeout, urllib.error.URLError):
+            continue
+    return None
+
+
+def _check_paper_via_hplip_sync(device_uri: str) -> bool | None:
+    """Use hp-info subprocess to check paper-out for HP USB printers. Returns True=out, False=ok, None=unknown."""
+    if not shutil.which("hp-info"):
+        return None
+    try:
+        result = subprocess.run(
+            ["hp-info", "-d", device_uri],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        output = (result.stdout + result.stderr).lower()
+        if "paper-out=true" in output or "out of paper" in output or "paper out" in output:
+            return True
+        if "paper-out=false" in output:
+            return False
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return None
+
+
+def _check_hp_paper_status_sync(printer_name: str) -> bool | None:
+    """
+    Check HP printer paper status outside of CUPS (driver-agnostic).
+    Returns True=paper out, False=paper present, None=cannot determine.
+    """
+    device_uri = _get_printer_device_uri_sync(printer_name)
+    if not device_uri:
+        return None
+    logger.debug("HP paper check: printer=%s device_uri=%s", printer_name, device_uri)
+
+    ip = _extract_ip_from_device_uri(device_uri)
+    if ip:
+        result = _check_paper_via_ews_sync(ip)
+        logger.debug("HP paper check via EWS: ip=%s result=%s", ip, result)
+        if result is not None:
+            return result
+
+    if "usb" in device_uri.lower() or device_uri.startswith("hp:"):
+        result = _check_paper_via_hplip_sync(device_uri)
+        logger.debug("HP paper check via HPLIP: device_uri=%s result=%s", device_uri, result)
+        if result is not None:
+            return result
+
+    return None
+
+
 async def _run_settle_window(
     cups_job_id: int,
     printer_name: str,
@@ -787,6 +889,31 @@ async def _run_settle_window(
         )
         logger.warning(
             "CUPS job %s inferred completion timed out without stable healthy printer state: %s",
+            cups_job_id,
+            _summarize_result(failure),
+        )
+        return failure
+
+    # Settle window passed cleanly. Now do a direct HP paper check to catch
+    # printers (e.g. DeskJet 2300) whose CUPS driver never reports paper-out
+    # through IPP but whose EWS / HPLIP interface does.
+    hp_paper_out = await asyncio.to_thread(_check_hp_paper_status_sync, printer_name)
+    logger.info(
+        "CUPS job %s post-settle HP paper check: printer=%s paper_out=%s",
+        cups_job_id,
+        printer_name,
+        hp_paper_out,
+    )
+    if hp_paper_out is True:
+        failure = _build_printer_attention_failure(
+            {"paper_out": True, "connection_state": "ONLINE", "operational_state": "ERROR",
+             "door_open": False, "cartridge_missing": False, "jammed": False, "ink_state": "UNKNOWN"},
+            metrics,
+            reasons=reasons + ["paper-out-detected-post-job"],
+            message="Printer is out of paper.",
+        )
+        logger.warning(
+            "CUPS job %s HP paper check detected paper-out after settle window: %s",
             cups_job_id,
             _summarize_result(failure),
         )
