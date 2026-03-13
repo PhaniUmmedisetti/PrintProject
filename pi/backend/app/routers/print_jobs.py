@@ -62,12 +62,7 @@ def _derive_failure_code(result: dict) -> str:
 
 def _is_accepted_completion(result: dict) -> bool:
     metrics = result.get("metrics") or {}
-    if bool(metrics.get("completionVerified")) and bool(metrics.get("allPagesPrinted")):
-        return True
-    # The settle window is the fallback verifier for printers that don't report
-    # page counters (e.g. DeskJet 2300). If it passed cleanly, trust it.
-    reasons = result.get("reasons") or []
-    return "completion-confirmed-after-settle-window" in reasons
+    return bool(metrics.get("completionVerified")) and bool(metrics.get("allPagesPrinted"))
 
 
 async def _record_retryable_failure(
@@ -314,20 +309,40 @@ async def _submit_and_monitor(
             return
 
         if result.get("status") == "DONE":
-            result = {
-                **result,
-                "status": "FAILED",
-                "message": str(result.get("message") or "CUPS reported completion but explicit page completion could not be verified."),
-                "reasons": [*list(result.get("reasons") or []), "completion-unverified"],
-                "metrics": metrics,
-            }
+            done_reasons = list(result.get("reasons") or [])
+            if "completion-confirmed-after-settle-window" in done_reasons:
+                # Printer gives no page counters and reported no hardware faults
+                # during or after the job (e.g. DeskJet 2300 driver is blind to
+                # paper presence). We cannot confirm physical output — ask the
+                # user to verify. OTP stays valid so they can retry if nothing came out.
+                failure_code = "UNVERIFIED_COMPLETION"
+                failure_message = "The kiosk could not verify whether pages physically printed."
+            else:
+                failure_code = _derive_failure_code(result)
+                failure_message = str(result.get("message") or "CUPS reported completion but page completion could not be verified.")
             logger.warning(
-                "Job %s refused DONE result without verified completion cups_job_id=%s reasons=%s metrics=%s",
+                "Job %s refused DONE result without verified completion cups_job_id=%s failure_code=%s reasons=%s metrics=%s",
                 job_id,
                 cups_job_id_str,
-                result.get("reasons") or [],
+                failure_code,
+                done_reasons,
                 metrics,
             )
+            await _record_retryable_failure(
+                job_id,
+                cups_job_id=cups_job_id_str,
+                failure_code=failure_code,
+                failure_message=failure_message,
+            )
+            logger.warning(
+                "Job %s classified as FAILED cups_job_id=%s failure_code=%s message=%s metrics=%s",
+                job_id,
+                cups_job_id_str,
+                failure_code,
+                failure_message,
+                metrics,
+            )
+            return
 
         failure_code = _derive_failure_code(result)
         failure_message = str(result.get("message") or "CUPS did not complete the full document print.")
