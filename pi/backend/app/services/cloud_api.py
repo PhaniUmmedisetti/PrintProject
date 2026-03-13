@@ -76,11 +76,11 @@ async def _request(
 
 async def release_job(otp: str) -> dict:
     """Release a PrintNest job for this device and receive a short-lived file token."""
-    payload = {"otp": otp}
+    body = {"otp": otp}
     if settings.store_id:
-        payload["storeId"] = settings.store_id
+        body["storeId"] = settings.store_id
 
-    response = await _request("POST", "/api/v1/device/release", json_body=payload)
+    response = await _request("POST", "/api/v1/device/release", json_body=body)
 
     if response.status_code == 400:
         raise InvalidOtpError()
@@ -95,11 +95,11 @@ async def release_job(otp: str) -> dict:
             raise PrinterNotReadyError(message, failure_code="PRINTER_NOT_READY")
 
     response.raise_for_status()
-    payload = response.json()
+    data = response.json()
     return {
-        "job_id": payload["jobId"],
-        "job_summary": payload["jobSummary"],
-        "file_token": payload["fileToken"]["token"],
+        "job_id": data["jobId"],
+        "job_summary": data["jobSummary"],
+        "file_token": data["fileToken"]["token"],
     }
 
 
@@ -126,52 +126,28 @@ async def mark_printing_started(job_id: str, cups_job_id: str | None, printer_na
     response.raise_for_status()
 
 
-async def mark_completed(job_id: str, cups_job_id: str | None, metrics: dict | None = None) -> None:
-    response = await _request(
-        "POST",
-        f"/api/v1/device/printjobs/{job_id}/completed",
-        json_body={"cupsJobId": cups_job_id, "metrics": metrics},
-    )
-    response.raise_for_status()
-
-
-async def mark_failed(
-    job_id: str,
-    cups_job_id: str | None,
-    failure_code: str,
-    failure_message: str,
-    is_retryable: bool,
-) -> None:
-    response = await _request(
-        "POST",
-        f"/api/v1/device/printjobs/{job_id}/failed",
-        json_body={
-            "cupsJobId": cups_job_id,
-            "failureCode": failure_code,
-            "failureMessage": failure_message,
-            "isRetryable": is_retryable,
-        },
-    )
-    response.raise_for_status()
-
-
 async def sync_terminal_event(event_type: str, payload: dict) -> None:
     event = event_type.upper()
     if event == "COMPLETED":
-        await mark_completed(
-            payload["jobId"],
-            payload.get("cupsJobId"),
-            metrics=payload.get("metrics"),
+        response = await _request(
+            "POST",
+            f"/api/v1/device/printjobs/{payload['jobId']}/completed",
+            json_body={"cupsJobId": payload.get("cupsJobId"), "metrics": payload.get("metrics")},
         )
+        response.raise_for_status()
         return
     if event == "FAILED":
-        await mark_failed(
-            payload["jobId"],
-            payload.get("cupsJobId"),
-            str(payload.get("failureCode") or "PRINT_FAILED"),
-            str(payload.get("failureMessage") or "Print failed."),
-            bool(payload.get("isRetryable")),
+        response = await _request(
+            "POST",
+            f"/api/v1/device/printjobs/{payload['jobId']}/failed",
+            json_body={
+                "cupsJobId": payload.get("cupsJobId"),
+                "failureCode": str(payload.get("failureCode") or "CUPS_ERROR"),
+                "failureMessage": str(payload.get("failureMessage") or "Print failed."),
+                "isRetryable": bool(payload.get("isRetryable")),
+            },
         )
+        response.raise_for_status()
         return
     raise ValueError(f"Unsupported terminal event type: {event_type}")
 

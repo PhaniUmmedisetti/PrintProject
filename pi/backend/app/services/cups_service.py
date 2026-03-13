@@ -22,11 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 # CUPS job-state codes (RFC 2911)
-_STATE_PENDING = {3, 4}  # pending / pending-held
-_STATE_PROCESSING = {5, 6}  # processing / processing-stopped
-_STATE_DONE = {9}  # completed
-_STATE_FAILED = {7, 8}  # canceled / aborted
-_STATE_BLOCKED = {4, 6}  # pending-held / processing-stopped
+_STATE_PENDING = {3}      # pending
+_STATE_PROCESSING = {5}   # processing
+_STATE_DONE = {9}         # completed
+_STATE_FAILED = {7, 8}    # canceled / aborted
+_STATE_BLOCKED = {4, 6}   # pending-held / processing-stopped
 _PRINTER_ATTRIBUTES = [
     "printer-state",
     "printer-state-reasons",
@@ -354,6 +354,14 @@ def _build_printer_detail_sync(conn: "cups.Connection", printers: dict, printer_
     except Exception:
         attrs = {}
 
+    logger.debug(
+        "Printer %s raw attrs: printer-state=%s printer-state-reasons=%s printer-state-message=%s",
+        printer_name,
+        attrs.get("printer-state"),
+        attrs.get("printer-state-reasons"),
+        attrs.get("printer-state-message"),
+    )
+
     state_code = int(attrs.get("printer-state", info.get("printer-state", 0)) or 0)
     state = _state_label(state_code)
 
@@ -469,6 +477,19 @@ def _poll_state_sync(cups_job_id: int, printer_name: str | None = None) -> dict:
             return result
         raise
 
+    logger.info(
+        "CUPS job %s raw poll: job-state=%s job-state-reasons=%s job-state-message=%s "
+        "job-impressions=%s/%s job-media-sheets=%s/%s",
+        cups_job_id,
+        attrs.get("job-state"),
+        attrs.get("job-state-reasons"),
+        attrs.get("job-state-message"),
+        attrs.get("job-impressions"),
+        attrs.get("job-impressions-completed"),
+        attrs.get("job-media-sheets"),
+        attrs.get("job-media-sheets-completed"),
+    )
+
     state = attrs.get("job-state", 0)
     reasons = _as_string_list(attrs.get("job-state-reasons"))
     message = attrs.get("job-state-message") or None
@@ -568,6 +589,50 @@ def _poll_state_sync(cups_job_id: int, printer_name: str | None = None) -> dict:
             }
             logger.warning("CUPS job %s reported partial completion: %s", cups_job_id, _summarize_result(result))
             return result
+
+        # Counters match, but still check job-state-reasons and live printer state.
+        # Some drivers increment counters on data-transfer while the printer is
+        # simultaneously reporting a hardware fault (e.g. media-empty).
+        if _has_terminal_failure_signal(reasons, message):
+            result = {
+                "status": "FAILED",
+                "message": "CUPS reported failure indicators despite full page count.",
+                "reasons": _dedupe_preserve_order(reasons + ["failure-signal-on-completion"]),
+                "metrics": metrics,
+            }
+            logger.warning(
+                "CUPS job %s full counters but failure signals in reasons: %s",
+                cups_job_id,
+                _summarize_result(result),
+            )
+            return result
+
+        if printer_name:
+            printer_detail = _printer_detail_sync(printer_name)
+            logger.info(
+                "CUPS job %s verified-done printer check: printer=%s state=%s operational=%s "
+                "paper_out=%s door_open=%s jammed=%s ink=%s reasons=%s",
+                cups_job_id,
+                printer_name,
+                printer_detail.get("state"),
+                printer_detail.get("operational_state"),
+                printer_detail.get("paper_out"),
+                printer_detail.get("door_open"),
+                printer_detail.get("jammed"),
+                printer_detail.get("ink_state"),
+                printer_detail.get("reasons"),
+            )
+            if _printer_has_completion_red_flag(printer_detail):
+                result = _build_printer_attention_failure(printer_detail, metrics, reasons=reasons)
+                logger.warning(
+                    "CUPS job %s full counters but printer red flag at DONE time printer=%s detail=%s result=%s",
+                    cups_job_id,
+                    printer_name,
+                    printer_detail,
+                    _summarize_result(result),
+                )
+                return result
+
         result = {
             "status": "DONE",
             "message": str(message or "job completed"),
@@ -662,7 +727,7 @@ async def submit_to_cups(file_path: str, printer_name: str, options: dict) -> in
     return await asyncio.to_thread(_submit_sync, file_path, printer_name, options)
 
 
-async def _confirm_inferred_completion(
+async def _run_settle_window(
     cups_job_id: int,
     printer_name: str,
     result: dict,
@@ -670,7 +735,7 @@ async def _confirm_inferred_completion(
     settle_seconds: float = 12.0,
     poll_interval: float = 2.0,
 ) -> dict:
-    """Wait briefly after inferred completion so delayed paper-out/jam signals win."""
+    """Wait briefly after CUPS DONE so delayed paper-out/jam signals can surface."""
     metrics = result.get("metrics") or {}
     reasons = list(result.get("reasons") or [])
     deadline = time.monotonic() + settle_seconds
@@ -678,6 +743,21 @@ async def _confirm_inferred_completion(
 
     while time.monotonic() < deadline:
         printer_detail = await get_printer_detail(printer_name)
+        logger.info(
+            "CUPS job %s settle-window poll: printer=%s state=%s connection=%s operational=%s "
+            "paper_out=%s door_open=%s cartridge_missing=%s jammed=%s ink=%s reasons=%s",
+            cups_job_id,
+            printer_name,
+            printer_detail.get("state"),
+            printer_detail.get("connection_state"),
+            printer_detail.get("operational_state"),
+            printer_detail.get("paper_out"),
+            printer_detail.get("door_open"),
+            printer_detail.get("cartridge_missing"),
+            printer_detail.get("jammed"),
+            printer_detail.get("ink_state"),
+            printer_detail.get("reasons"),
+        )
 
         if _printer_requires_attention(printer_detail):
             failure = _build_printer_attention_failure(
@@ -733,6 +813,12 @@ async def wait_for_cups_job(
     """Poll until the CUPS job reaches a terminal state."""
     started = time.monotonic()
     last_snapshot: tuple | None = None
+    # Track any printer attention seen while the job is still active.
+    # If the job transitions PENDING→PROCESSING→DONE between two CUPS polls,
+    # the media-empty / jam signal may clear before the settle window runs.
+    # A mid-sleep printer probe catches it before it disappears.
+    printer_attention_during_job: dict | None = None
+
     while True:
         if time.monotonic() - started > timeout_seconds:
             result = {
@@ -773,12 +859,54 @@ async def wait_for_cups_job(
                 result["message"] = str(result.get("message") or "Printer stopped before the full document finished.")
                 logger.warning("CUPS job %s treated blocked state as retryable failure: %s", cups_job_id, _summarize_result(result))
             elif result["status"] == "DONE" and printer_name:
-                metrics = result.get("metrics") or {}
-                completion_source = metrics.get("completionSource")
-                if completion_source != "sheets":
-                    result = await _confirm_inferred_completion(cups_job_id, printer_name, result)
+                if printer_attention_during_job is not None:
+                    # A red flag was seen while the job was actively processing.
+                    # Even though CUPS now says DONE, the job did not print successfully.
+                    metrics = result.get("metrics") or {}
+                    failure = _build_printer_attention_failure(
+                        printer_attention_during_job,
+                        metrics,
+                        reasons=list(result.get("reasons") or []),
+                    )
+                    logger.warning(
+                        "CUPS job %s DONE overridden to FAILED: printer attention was seen "
+                        "during active job printer=%s detail=%s result=%s",
+                        cups_job_id,
+                        printer_name,
+                        printer_attention_during_job,
+                        _summarize_result(failure),
+                    )
+                    return failure
+                result = await _run_settle_window(cups_job_id, printer_name, result)
             return result
-        await asyncio.sleep(poll_interval)
+
+        # Job still active. Probe printer state halfway through the sleep window.
+        # This halves the gap between CUPS polls so a brief media-empty / jam
+        # signal is less likely to appear and clear unseen.
+        await asyncio.sleep(poll_interval / 2)
+        if printer_name and printer_attention_during_job is None:
+            printer_detail = await get_printer_detail(printer_name)
+            logger.info(
+                "CUPS job %s mid-sleep printer probe: state=%s operational=%s "
+                "paper_out=%s door_open=%s jammed=%s ink=%s reasons=%s",
+                cups_job_id,
+                printer_detail.get("state"),
+                printer_detail.get("operational_state"),
+                printer_detail.get("paper_out"),
+                printer_detail.get("door_open"),
+                printer_detail.get("jammed"),
+                printer_detail.get("ink_state"),
+                printer_detail.get("reasons"),
+            )
+            if _printer_requires_attention(printer_detail):
+                printer_attention_during_job = printer_detail
+                logger.warning(
+                    "CUPS job %s mid-sleep probe found printer attention printer=%s detail=%s",
+                    cups_job_id,
+                    printer_name,
+                    printer_detail,
+                )
+        await asyncio.sleep(poll_interval / 2)
 
 
 async def get_printer_states() -> dict[str, str]:

@@ -149,6 +149,16 @@ function describeFailureCode(failureCode: string | null | undefined): { title: s
         title: "File Could Not Be Prepared",
         issue: "The kiosk could not prepare your file for printing.",
       };
+    case "CUPS_ERROR":
+      return {
+        title: "Printing Failed",
+        issue: "The printer did not complete the job.",
+      };
+    case "WATCHDOG_TIMEOUT":
+      return {
+        title: "Print Interrupted",
+        issue: "The print was interrupted before it could finish.",
+      };
     case "UNVERIFIED_COMPLETION":
       return {
         title: "Print Not Confirmed",

@@ -44,7 +44,6 @@ def _has_reason(reasons: list[str], *needles: str) -> bool:
 def _derive_failure_code(result: dict) -> str:
     reasons = [str(reason) for reason in result.get("reasons") or []]
     message = str(result.get("message") or "")
-    all_pages_printed = bool((result.get("metrics") or {}).get("allPagesPrinted"))
 
     if _has_reason(reasons, "jam", "paper-jam") or "jam" in message.lower():
         return "PAPER_JAM"
@@ -58,34 +57,12 @@ def _derive_failure_code(result: dict) -> str:
         return "INK_EMPTY"
     if _has_reason(reasons, "marker-supply-low", "marker-low", "toner-low", "ink-low"):
         return "INK_LOW"
-    if _has_reason(reasons, "completion-unverified"):
-        return "UNVERIFIED_COMPLETION"
-    if not all_pages_printed:
-        return "PARTIAL_PRINT"
-    return "PRINT_FAILED"
-
-
-def _is_verified_completion(result: dict) -> bool:
-    metrics = result.get("metrics") or {}
-    return bool(metrics.get("completionVerified")) and bool(metrics.get("allPagesPrinted"))
-
-
-def _has_any_printed_output(result: dict) -> bool:
-    metrics = result.get("metrics") or {}
-    sheets_printed = metrics.get("sheetsPrinted")
-
-    # For inferred completion, trust the media-sheet counter rather than the
-    # page counter. A page can be "completed" in CUPS even when no sheet
-    # actually exited the printer.
-    return isinstance(sheets_printed, int) and sheets_printed > 0
+    return "CUPS_ERROR"
 
 
 def _is_accepted_completion(result: dict) -> bool:
-    if _is_verified_completion(result):
-        return True
-
-    reasons = [str(reason) for reason in result.get("reasons") or []]
-    return "completion-inferred-from-printer-state" in reasons and _has_any_printed_output(result)
+    metrics = result.get("metrics") or {}
+    return bool(metrics.get("completionVerified")) and bool(metrics.get("allPagesPrinted"))
 
 
 async def _record_retryable_failure(
@@ -349,9 +326,6 @@ async def _submit_and_monitor(
 
         failure_code = _derive_failure_code(result)
         failure_message = str(result.get("message") or "CUPS did not complete the full document print.")
-        # Only a confirmed COMPLETED event should consume the OTP. Any local
-        # print failure keeps the same OTP reusable from the start.
-        is_retryable = True
         await _record_retryable_failure(
             job_id,
             cups_job_id=cups_job_id_str,
@@ -359,30 +333,25 @@ async def _submit_and_monitor(
             failure_message=failure_message,
         )
         logger.warning(
-            "Job %s classified as FAILED cups_job_id=%s failure_code=%s retryable=%s message=%s metrics=%s",
+            "Job %s classified as FAILED cups_job_id=%s failure_code=%s message=%s metrics=%s",
             job_id,
             cups_job_id_str,
             failure_code,
-            is_retryable,
             failure_message,
             metrics,
         )
     except Exception as exc:
         failure_message = str(exc)
-        # Treat every local failure as retryable so the user can re-enter the
-        # same OTP unless we explicitly reached COMPLETED.
-        is_retryable = True
         await _record_retryable_failure(
             job_id,
             cups_job_id=cups_job_id_str,
-            failure_code="PRINT_FAILED",
+            failure_code="CUPS_ERROR",
             failure_message=failure_message,
         )
         logger.exception(
-            "Job %s hit exception during print flow cups_job_id=%s retryable=%s",
+            "Job %s hit exception during print flow cups_job_id=%s",
             job_id,
             cups_job_id_str,
-            is_retryable,
         )
     finally:
         should_cleanup = True
