@@ -313,7 +313,7 @@ def _printer_attention_failure_code(detail: dict) -> str:
         return "PAPER_JAM"
     if str(detail.get("ink_state") or "UNKNOWN").upper() == "EMPTY":
         return "INK_EMPTY"
-    return "PRINT_FAILED"
+    return "CUPS_ERROR"
 
 
 def _build_printer_attention_failure(
