@@ -30,6 +30,7 @@ sudo apt install -y \
   python3 python3-pip python3-venv python3-dev \
   cups cups-client python3-cups \
   build-essential pkg-config libcups2-dev libcupsimage2-dev \
+  hplip \
   libreoffice --no-install-recommends \
   chromium
 ```
@@ -202,6 +203,20 @@ Expected real flow:
 6. Local status moves to `DONE`.
 7. Success screen appears.
 
+Retry behavior:
+- If the Pi reports a retryable failure to `PrintNest`, the same OTP remains valid.
+- The user can enter that same OTP again later and the job will restart from the beginning.
+- If the Pi reports a non-retryable failure, that OTP will no longer work.
+
+Paper-out detection:
+- The HP DeskJet 2300 CUPS driver does not report paper-out through IPP.
+- After a job completes, the backend queries the printer directly via the HP Embedded Web
+  Server (EWS) at `http://<printer-ip>/DevMgmt/ProductStatusDyn.xml` (WiFi printers) or
+  via `hp-info` (USB printers, requires `hplip`).
+- If paper-out is detected: job fails with `PAPER_OUT` and the error screen is shown.
+- If the printer is unreachable via both methods: the settle window result is trusted and
+  the job is accepted as successful.
+
 Useful live checks during print:
 
 ```bash
@@ -209,4 +224,3 @@ lpstat -o
 lpstat -W not-completed -o
 sudo tail -f /var/log/cups/error_log
 ```
-
